@@ -4,7 +4,7 @@
 ## Install the first test APK
 1. Open [Builds / Actions](https://github.com/mohannadzohair456-beep/folio-finance/actions/workflows/build-apk.yml).
 2. Open the newest successful run, then download the **Folio-TEST-APK** artifact and extract **app-debug.apk**.
-3. Open the APK on Android, approve installation from your Files/browser when prompted, and launch **Folio**. Sample data is labeled; start a private workspace in settings.
+3. Open the APK on Android, approve installation from your Files/browser when prompted, and launch **Folio**. New installs start with a real empty workspace and a visible tracking setup guide.
 4. This is an early **test build** signed with a temporary debug key. Future release-signed builds will **not update over a test APK**, and the debug app will need to be uninstalled. Export any transactions before that switch.
 
 ## Enable permanent, updateable signed releases
@@ -28,3 +28,16 @@ Grant Android Notification Access for Folio only if you want automatic detection
 - `tests/` — parser and UI sanity checks.
 
 **Security notice:** This repository was created PUBLIC. Consider making it PRIVATE under GitHub Settings. Never upload your financial data or signing key.
+
+## Getting real transactions to appear (tracking v0.2)
+
+1. From the Folio dashboard, tap **Enable** to opt into tracking. Then tap **Allow** and grant **Notification access** through Android settings.
+2. Android 13 and later may restrict this permission for sideloaded apps. If blocked, use **Android Settings → Apps → Folio → ⋮ → Allow restricted settings** only if you trust Folio, then return and grant notification access.
+3. Messages notifications are approved by default. If a bank sends alerts from its own app, enable tracking first, wait for a **new notification**, then select the app package under **Recently seen apps**. Only approved sources are parsed; raw notification bodies are not saved.
+4. Make a **new** transaction after setup. The dashboard shows processed, recognized and unrecognized counts to help locate failures. The app cannot read historical messages or fetch card transactions from your bank.
+5. For an unsupported bank notification, enter the expense manually. You can share a fully redacted template (no names, card/account details, PINs, passwords or codes) to improve supported message patterns.
+6. Totals use only the selected currency for the current calendar month. If a payment is in another currency, change **Reporting currency** in Settings.
+
+### Signing issue
+
+If signing secrets are present but invalid, GitHub Actions will still attempt a **test APK** fallback. GitHub permanently signed releases require the correct password for the matching private keystore. **Do not commit the private signing kit.** Installing a different-signed APK over an existing install is blocked by Android. Export data and verify backups before changing signing identity.
