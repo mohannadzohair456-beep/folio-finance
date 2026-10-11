@@ -35,6 +35,6 @@ const recovered=JSON.parse(migrated.data.get('folio_finance_v1'));
 assert.equal(recovered.demo,false);
 assert.equal(recovered.transactions.length,1,'Manual records retained during migration');
 assert.equal(recovered.transactions[0].id,'real');
-assert.equal(Object.keys(recovered.budgets).length,0,'Demo budgets removed');
+assert.equal(Object.keys(recovered.budgets.EGP||{}).length,0,'Demo budget limits removed');
 
 console.log('PASS bundled interface and tracking setup checks');
