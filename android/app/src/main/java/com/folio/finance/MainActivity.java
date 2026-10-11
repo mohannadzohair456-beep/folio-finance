@@ -4,6 +4,10 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.speech.RecognizerIntent;
 import java.util.ArrayList;
+import android.net.Uri;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -31,6 +35,7 @@ public final class MainActivity extends Activity {
     private View loadingOverlay;
     private boolean loaded;
     private static final int VOICE_REQUEST = 7609;
+    private static final int CSV_IMPORT_REQUEST = 7610;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -94,6 +99,27 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == CSV_IMPORT_REQUEST) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null && web != null) {
+                try (InputStream in = getContentResolver().openInputStream(data.getData());
+                     ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                    if (in == null) throw new IllegalArgumentException("Unable to read selected document");
+                    byte[] chunk = new byte[8192];
+                    int n;
+                    while ((n = in.read(chunk)) != -1) {
+                        if (out.size() + n > 2_000_000) throw new IllegalArgumentException("CSV is larger than 2 MB");
+                        out.write(chunk, 0, n);
+                    }
+                    String csv = out.toString(StandardCharsets.UTF_8.name());
+                    String js = "window.folioImportCsv&&window.folioImportCsv(" + JSONObject.quote(csv) + ")";
+                    web.post(() -> web.evaluateJavascript(js, null));
+                } catch (Exception e) {
+                    web.post(() -> web.evaluateJavascript(
+                        "window.folioImportError&&window.folioImportError('Could not read the chosen CSV file.')", null));
+                }
+            }
+            return;
+        }
         if (requestCode != VOICE_REQUEST || web == null) return;
         String transcript = "";
         String error = "";
@@ -121,6 +147,21 @@ public final class MainActivity extends Activity {
                 getWindow().setNavigationBarColor(dark?Color.rgb(12,44,35):Color.rgb(247,248,250));
                 getWindow().getDecorView().setSystemUiVisibility(dark?0:
                     View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            });
+        }
+        @JavascriptInterface public void pickCsvFile() {
+            runOnUiThread(() -> {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES,
+                        new String[]{"text/csv", "text/plain", "application/vnd.ms-excel", "application/octet-stream"});
+                    startActivityForResult(intent, CSV_IMPORT_REQUEST);
+                } catch (Exception ignored) {
+                    if (web != null) web.evaluateJavascript(
+                        "window.folioImportError&&window.folioImportError('File picker is unavailable.')", null);
+                }
             });
         }
         @JavascriptInterface public void startVoiceRecognition(String locale) {
