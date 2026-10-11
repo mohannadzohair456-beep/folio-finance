@@ -56,6 +56,8 @@ jobs:
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Build updateable signed release
+        id: signed_build
+        continue-on-error: true
         if: steps.signing.outputs.signed == 'true'
         env:
           FOLIO_SIGNING_STORE_FILE: ${{ runner.temp }}/folio-release.p12
@@ -64,13 +66,13 @@ jobs:
           FOLIO_VERSION_NAME: 0.1.${{ github.run_number }}
         run: gradle -p android assembleRelease --no-daemon
       - name: Build installable test APK
-        if: steps.signing.outputs.signed != 'true'
+        if: steps.signed_build.outcome != 'success'
         env:
           FOLIO_VERSION_CODE: ${{ github.run_number }}
           FOLIO_VERSION_NAME: 0.1.${{ github.run_number }}-test
         run: gradle -p android assembleDebug --no-daemon
       - name: Upload signed APK
-        if: steps.signing.outputs.signed == 'true'
+        if: steps.signed_build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: Folio-Signed-APK
@@ -78,7 +80,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload test APK
-        if: steps.signing.outputs.signed != 'true'
+        if: steps.signed_build.outcome != 'success'
         uses: actions/upload-artifact@v4
         with:
           name: Folio-TEST-APK
@@ -86,7 +88,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Publish test APK as GitHub prerelease
-        if: steps.signing.outputs.signed != 'true'
+        if: steps.signed_build.outcome != 'success'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: folio-test-${{ github.run_number }}
@@ -95,7 +97,7 @@ jobs:
           make_latest: false
           files: android/app/build/outputs/apk/debug/app-debug.apk
       - name: Publish signed release
-        if: steps.signing.outputs.signed == 'true'
+        if: steps.signed_build.outcome == 'success'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1.${{ github.run_number }}
