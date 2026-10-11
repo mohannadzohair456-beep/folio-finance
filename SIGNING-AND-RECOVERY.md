@@ -1,5 +1,20 @@
 # Folio Android Update and Data-Recovery Guide
 
+## Safer migration: install Folio New alongside the old Folio
+
+As of the side-by-side migration release, the permanent signed Folio Android application ID is **`com.folio.finance.app`**. Older debug test builds use **`com.folio.finance`**. Android therefore treats them as separate applications, and they can coexist on the same phone.
+
+**DO NOT uninstall the old version first.** Keep the old Folio installed and follow this order:
+
+1. Download and install the newest **signed** `app-release.apk` from the [latest Folio GitHub release](https://github.com/mohannadzohair456-beep/folio-finance/releases/latest). It initially appears as **Folio New** to distinguish it from the older Folio app.
+2. Open the older **Folio** and use **Transactions → Export CSV**. Keep a private copy of the transaction export.
+3. Open **Folio New** and finish onboarding. In **Transactions → Import CSV**, select the saved `.csv` file. Verify the amounts, dates and counts.
+4. Copy any manually entered balances, expected income, budgets, notification sources and settings not covered by the CSV. The CSV currently contains only transaction history, not a full app backup.
+5. **Only after verifying the new app** may you uninstall the old test Folio. Keeping the old installation until then is safe.
+6. For future Folio updates, install the latest signed `app-release.apk` **over Folio New**. The application ID and signing certificate will remain stable.
+
+Do not try to install releases tagged `v0.2.32` or old `folio-test-*` as updates to the new package: they use the legacy ID and/or debug signatures. Side-by-side migration is **a one-time new app installation**, not an in-place update of old data. It avoids deleting the old data before you verify recovery.
+
 ## Why Android says "App conflicts with existing package"
 
 Early Folio `app-debug.apk` builds were signed with different temporary GitHub runner certificates. Although they all use `com.folio.finance`, Android rejects an update whose signing certificate does not match the installed package. Installing a newer build signed with a different certificate **cannot** preserve the original installation in place.
@@ -38,7 +53,7 @@ This fingerprint is not a secret; it is an identifier for the release signing id
 
 ### First transition from the old test build
 
-The debug APK and the newly signed release use different certificates. Android will not let the new APK replace the old one directly. After safely exporting the old transactions (and accepting the limitations above), uninstall the old test build **once**, install the stable `app-release.apk`, and import the CSV. If losing anything is unacceptable, keep the old installation until a full backup method is available.
+The debug APK and the newly signed release use different certificates. Android will not let the new APK replace the old one directly. Do not uninstall the old test build. Install the new `com.folio.finance.app` signed app alongside it, export CSV from the old one, import and verify it in the new one, then remove the old app only if you are comfortable with the recovered data.
 
 ### All subsequent updates
 
