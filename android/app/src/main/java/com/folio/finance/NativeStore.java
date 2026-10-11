@@ -36,6 +36,43 @@ final class NativeStore {
             prefs(c).edit().putString("sources", valid.toString()).apply();
         } catch (Exception ignored) { }
     }
+    /** Package IDs only, after explicit capture opt-in. No notification text is stored. */
+    static synchronized void observe(Context c, String pkg) {
+        if(pkg==null || !pkg.matches("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+")) return;
+        SharedPreferences p=prefs(c);
+        try {
+            JSONArray old=new JSONArray(p.getString("observed_apps","[]"));
+            JSONArray next=new JSONArray();
+            for(int i=0;i<old.length();i++) if(!pkg.equals(old.optString(i))) next.put(old.optString(i));
+            next.put(pkg);
+            JSONArray capped=new JSONArray();
+            for(int i=Math.max(0,next.length()-25);i<next.length();i++) capped.put(next.getString(i));
+            p.edit().putString("observed_apps",capped.toString()).apply();
+        }catch(Exception ignored){}
+    }
+    static synchronized JSONArray getObservedSources(Context c) {
+        try{return new JSONArray(prefs(c).getString("observed_apps","[]"));}
+        catch(Exception ignored){return new JSONArray();}
+    }
+    static synchronized void note(Context c,String result) {
+        SharedPreferences p=prefs(c);
+        SharedPreferences.Editor e=p.edit();
+        e.putInt("diag_allowed",p.getInt("diag_allowed",0)+1);
+        if("recognized".equals(result))e.putInt("diag_parsed",p.getInt("diag_parsed",0)+1);
+        if("unrecognized".equals(result)||"empty".equals(result))e.putInt("diag_unrecognized",p.getInt("diag_unrecognized",0)+1);
+        e.putLong("diag_last_at",System.currentTimeMillis()).putString("diag_last_result",result).apply();
+    }
+    static synchronized JSONObject diagnostics(Context c) {
+        SharedPreferences p=prefs(c);JSONObject o=new JSONObject();
+        try{
+            o.put("allowed",p.getInt("diag_allowed",0));
+            o.put("parsed",p.getInt("diag_parsed",0));
+            o.put("unrecognized",p.getInt("diag_unrecognized",0));
+            o.put("lastAt",p.getLong("diag_last_at",0));
+            o.put("lastResult",p.getString("diag_last_result",""));
+        }catch(Exception ignored){}
+        return o;
+    }
     static boolean allowed(Context c, String pkg) {
         JSONArray a = getSources(c);
         for (int i=0; i<a.length(); i++) if (pkg.equals(a.optString(i))) return true;

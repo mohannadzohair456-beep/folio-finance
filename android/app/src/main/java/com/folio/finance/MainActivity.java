@@ -75,6 +75,8 @@ public final class MainActivity extends Activity {
                 startActivity(Intent.createChooser(share, "Export Folio transactions"));
             });
         }
+        @JavascriptInterface public String getCaptureDiagnostics() { return NativeStore.diagnostics(MainActivity.this).toString(); }
+        @JavascriptInterface public String getObservedSources() { return NativeStore.getObservedSources(MainActivity.this).toString(); }
         @JavascriptInterface public String getSourcePackages() { return NativeStore.getSources(MainActivity.this).toString(); }
         @JavascriptInterface public void setSourcePackages(String list) { NativeStore.setSources(MainActivity.this, list); }
         @JavascriptInterface public boolean notificationAccessGranted() {
