@@ -22,7 +22,7 @@ function boot(seed){
 const fresh=boot();
 assert.equal(JSON.parse(fresh.data.get('folio_finance_v1')).demo,false,'Real mode on fresh installation');
 assert.equal(JSON.parse(fresh.data.get('folio_finance_v1')).transactions.length,0,'No fake entries');
-assert.ok(fresh.doc.getElementById('root').innerHTML.includes('Transaction tracking'));
+assert.ok(fresh.doc.getElementById('root').innerHTML.includes('Ask Folio'),'Home offers financial assistant instead of diagnostics');
 for(const [id,value] of Object.entries({txmerchant:'Coffee shop',txamount:'135.50',txcurrency:'EGP',txcategory:'Food & drinks',txdate:new Date().toISOString().slice(0,10)})) fresh.doc.getElementById(id).value=value;
 vm.runInContext('saveTransaction({preventDefault(){}})',fresh.sandbox);
 const tracked=JSON.parse(fresh.data.get('folio_finance_v1')).transactions;
