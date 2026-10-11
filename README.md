@@ -1,3 +1,13 @@
+# Folio — Important Android Update Notice
+
+> **DO NOT install `app-debug.apk` as an update to an existing Folio app.** Early test APKs were built with different temporary signing keys; Android rejects them as conflicting packages. The release workflow now **requires one permanent signing certificate** and will not publish new disposable debug APKs. The repository signing password must be corrected by its owner before the first permanent `app-release.apk` can be published.
+>
+> **Do not uninstall an app holding financial data.** Export transactions first. The next signed release includes **Transactions → Import CSV** to recover transaction history, but it does not restore every app setting or unexported data. Read the [step-by-step signing and recovery guide](SIGNING-AND-RECOVERY.md).
+
+[Future permanent releases](https://github.com/mohannadzohair456-beep/folio-finance/releases/latest) · [Signing secrets](https://github.com/mohannadzohair456-beep/folio-finance/settings/secrets/actions)
+
+---
+
 # Folio 2.0 Beta — Your Financial Companion
 
 **Latest verified test build:** [Folio beta APK build #25](https://github.com/mohannadzohair456-beep/folio-finance/releases/download/folio-test-25/app-debug.apk)  
