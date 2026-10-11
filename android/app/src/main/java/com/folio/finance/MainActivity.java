@@ -1,6 +1,10 @@
 package com.folio.finance;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.speech.RecognizerIntent;
+import java.util.ArrayList;
+import org.json.JSONObject;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.graphics.Color;
@@ -17,6 +21,7 @@ import android.webkit.WebViewClient;
 public final class MainActivity extends Activity {
     private WebView web;
     private boolean loaded;
+    private static final int VOICE_REQUEST = 7609;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -52,6 +57,19 @@ public final class MainActivity extends Activity {
     private void refresh() {
         if (loaded && web != null) web.post(() -> web.evaluateJavascript("window.folioNativeRefresh&&window.folioNativeRefresh()", null));
     }
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != VOICE_REQUEST || web == null) return;
+        String transcript = "";
+        String error = "";
+        if (resultCode == RESULT_OK && data != null) {
+            ArrayList<String> results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+            if (results != null && !results.isEmpty()) transcript = results.get(0);
+        } else if (resultCode != RESULT_CANCELED) error = "Speech was not recognized. Please type your request.";
+        final String payload = "window.FolioV2&&window.FolioV2.onVoiceResult(" +
+            JSONObject.quote(transcript) + "," + JSONObject.quote(error) + ")";
+        web.post(() -> web.evaluateJavascript(payload, null));
+    }
     @Override public void onBackPressed() {
         if (loaded) web.evaluateJavascript("window.folioGoHome&&window.folioGoHome()", null);
         else super.onBackPressed();
@@ -62,6 +80,22 @@ public final class MainActivity extends Activity {
     }
 
     public final class NativeApi {
+        @JavascriptInterface public void startVoiceRecognition(String locale) {
+            runOnUiThread(() -> {
+                try {
+                    Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-EG".equals(locale) ? "ar-EG" : "en-US");
+                    intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Folio about your money");
+                    intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+                    intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+                    startActivityForResult(intent, VOICE_REQUEST);
+                } catch (ActivityNotFoundException e) {
+                    if (web != null) web.evaluateJavascript(
+                        "window.FolioV2&&window.FolioV2.onVoiceResult('','Speech recognition is unavailable on this device.')", null);
+                }
+            });
+        }
         @JavascriptInterface public String getPendingTransactions() { return NativeStore.getPending(MainActivity.this).toString(); }
         @JavascriptInterface public void ackTransactions(String ids) { NativeStore.ack(MainActivity.this, ids); }
         @JavascriptInterface public boolean captureEnabled() { return NativeStore.isCaptureEnabled(MainActivity.this); }

@@ -41,6 +41,8 @@ jobs:
           java -cp /tmp/folio-parser-tests ParserTest
       - name: Test interface
         run: node tests/ui.test.cjs
+      - name: Test onboarding and Folio assistant
+        run: node tests/v2.test.cjs
       - name: Configure signing
         id: signing
         env:
