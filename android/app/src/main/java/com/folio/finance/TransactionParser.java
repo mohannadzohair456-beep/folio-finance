@@ -12,8 +12,8 @@ public final class TransactionParser {
     private static final String NUMBER = "([0-9]{1,3}(?:[,][0-9]{3})+(?:\\.[0-9]{1,2})?|[0-9]+(?:\\.[0-9]{1,2})?)";
     private static final Pattern CUR_FIRST = Pattern.compile("(?i)(?<![\\p{L}\\p{N}])(" + CURRENCY + ")\\s*[:]?\\s*" + NUMBER);
     private static final Pattern NUM_FIRST = Pattern.compile("(?i)(?<![\\p{L}\\p{N}])" + NUMBER + "\\s*(" + CURRENCY + ")(?![\\p{L}])");
-    private static final Pattern EXPENSE = Pattern.compile("(?iu)\\b(?:spent|purchase|purchased|paid|payment|debited|withdrawn|withdrawal|charged|card transaction|pos transaction|sent)\\b|(?:خصم|سحب|شراء|دفع|مدفوعات|عملية شرائية|تم تحويل مبلغ من حسابك)");
-    private static final Pattern INCOME = Pattern.compile("(?iu)\\b(?:received|credited|credit alert|deposited|deposit|salary|refund|refunded|cashback|incoming transfer)\\b|(?:إيداع|ايداع|استلام|استرداد|إضافة|اضافة|تحويل وارد|تم اضافة|تم إيداع|حوالة واردة|تم تحويل.*إلى حسابك)");
+    private static final Pattern EXPENSE = Pattern.compile("(?iu)\\b(?:spent|purchase|purchased|paid|payment|debited|debit alert|withdrawn|withdrawal|charged|card transaction|pos transaction|sent|card (?:was )?used|used (?:your )?card|successful purchase|transferred out)\\b|(?:خصم|سحب|شراء|دفع|مدفوعات|عملية شرائية|تم تحويل مبلغ من حسابك)");
+    private static final Pattern INCOME = Pattern.compile("(?iu)\\b(?:received|credited|credit alert|deposited|deposit|salary|refund|refunded|cashback|incoming transfer|transfer received|money received|funds received)\\b|(?:إيداع|ايداع|استلام|استرداد|إضافة|اضافة|تحويل وارد|تم اضافة|تم إيداع|حوالة واردة|تم تحويل.*إلى حسابك)");
     private static final Pattern REJECT = Pattern.compile("(?iu)\\b(?:otp|one.time.password|verification code|security code|declined|failed|rejected|unsuccessful|pending|authorization only|authorisation only|available balance only)\\b|(?:رمز التحقق|كود التحقق|لم تتم|مرفوض|فشلت|رصيدك فقط)");
     private static final Pattern MERCHANT = Pattern.compile("(?iu)\\b(?:at|from|to|merchant|via)\\s+([^.;,\\n]{2,55})|(?:لدى|عند|من|إلى)\\s+([^.;,\\n]{2,55})");
     public static final class ParsedTransaction {
