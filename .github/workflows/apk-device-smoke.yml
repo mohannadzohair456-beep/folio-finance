@@ -1,0 +1,40 @@
+name: APK Install Compatibility Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apk-device-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-on-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download exact Folio build 26 APK
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output /tmp/folio.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/download/folio-test-26/app-debug.apk
+          echo "d335c18ab9a3a2fc0912e3347767148e2047e662938435f555f8f8f7949781f8  /tmp/folio.apk" | sha256sum --check
+      - name: Enable hardware virtualization
+        run: |
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Install and launch APK on clean Android 10 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            adb install -r /tmp/folio.apk
+            adb shell am start -n com.folio.finance/.MainActivity
+            sleep 10
+            adb shell dumpsys package com.folio.finance | grep -m 1 versionCode
+            adb shell pidof com.folio.finance
