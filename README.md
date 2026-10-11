@@ -1,3 +1,27 @@
+# Folio 2.0 Beta — Your Financial Companion
+
+**Latest verified test build:** [Folio beta APK build #25](https://github.com/mohannadzohair456-beep/folio-finance/releases/download/folio-test-25/app-debug.apk)  
+[All releases](https://github.com/mohannadzohair456-beep/folio-finance/releases) · [Product roadmap](PRODUCT-ROADMAP.md)
+
+## What's new in Folio 2.0
+
+- Branded 4-stage onboarding: welcome, optional financial starting balances and budgets, optional Android notification access, and setup confirmation.
+- Cleaner dashboard with no notification technical controls on Home. Manage notification capture and source-app allowlists in Settings.
+- Native branded launch indicator and motion-conscious premium interface.
+- **Ask Folio**: text instructions, optional Android voice-to-text, expense and income entry, balance snapshots, expected salary, monthly and category budgets, cash-flow summaries, and basic affordability estimates.
+- Every proposed financial write requires explicit review and confirmation. The assistant is a local rules engine, not a generative cloud AI model.
+- Basic English plus limited Egyptian Arabic numeric command recognition. Speech support depends on the Android device's installed recognizer, which may send audio to its service provider.
+- Reported balances are estimates: snapshot amount plus *recorded* transactions after that snapshot. Expected salary and target budgets are plans, not bank money or recorded income.
+
+## Installation
+
+Download the APK and open it from your Android **Files → Downloads** application. Android 8.0+ is required. A mobile browser sometimes struggles with GitHub APK redirect downloads; in that case, download the build artifact ZIP on a computer or use the direct ChatGPT attachment.
+
+**Current limitation:** This prerelease uses a GitHub runner debug signature. It may not update over a previous Folio APK from a different build. Do not uninstall an older app that contains important records until you have reviewed and safely exported your data; CSV import/restore is not yet implemented. Stable signed releases require a correct private keystore and matching `FOLIO_KEYSTORE_B64` / `FOLIO_SIGNING_PASSWORD` secrets. The release-signing setup is currently not working.
+
+The automated GitHub Actions build validates Java transaction parsing, existing UI behavior, onboarding and assistant commands, then publishes an APK. This is not a substitute for testing on a real device and against your own bank's alert formats.
+
+---
 # Folio — Personal Finance
 **Android-first, offline-first and free to install.** Branded app icon, dashboard, transactions, analytics, budgets, and optional notification recognition.
 
