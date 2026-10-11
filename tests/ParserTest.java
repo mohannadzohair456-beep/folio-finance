@@ -17,6 +17,11 @@ public class ParserTest {
     no("Bank","Your card payment was declined EGP 50");
     no("Bank","Your available balance only is EGP 5000");
     no("News","Company announced EGP 700 of funding");
+    ok("Card notification","Your card was used for EGP 275.00 at Market","expense",27500,"EGP");
+    ok("Card notification","Your debit card was used for 1,050 EGP at Supermarket","expense",105000,"EGP");
+    ok("Transfer","Funds received SAR 1,200","income",120000,"SAR");
+    ok("Bank","تم شراء منتجات بمبلغ ١٢٥٫٥٠ جنيه","expense",12550,"EGP");
+    no("Bank","Your purchase for EGP 150.00 was not approved");
     System.out.println("PASS "+n+" parser cases");
   }
 }
