@@ -30,7 +30,7 @@ assert.equal(tracked.length,1,'Manual expense persists');
 assert.equal(tracked[0].amountMinor,13550,'Accurate monetary unit');
 assert.equal(tracked[0].direction,'expense');
 assert.ok(fresh.doc.getElementById('root').innerHTML.includes('Coffee shop'),'Saved expense appears on dashboard');
-const migrated=boot({demo:true,currency:'EGP',transactions:[{source:'demo',id:'sample'},{source:'manual',id:'real',currency:'EGP',direction:'expense',amountMinor:12500,merchant:'Book',occurredAt:Date.now()}],budgets:{EGP:{Shopping:4000}}});
+const migrated=boot({demo:true,currency:'EGP',transactions:[{source:'demo',id:'sample'},{source:'manual',id:'real',currency:'EGP',direction:'expense',amountMinor:12500,merchant:'Book',category:'Shopping',occurredAt:Date.now()}],budgets:{EGP:{Shopping:4000}}});
 const recovered=JSON.parse(migrated.data.get('folio_finance_v1'));
 assert.equal(recovered.demo,false);
 assert.equal(recovered.transactions.length,1,'Manual records retained during migration');
