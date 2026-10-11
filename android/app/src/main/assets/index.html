@@ -119,7 +119,7 @@ function empty(title,msg){return `<div class="empty"><div class="bubble">${icon(
 function overview(){let stats=txStats(monthTx()),budgetTotal=Object.values(currentBudgets()).reduce((sum,n)=>sum+Number(n||0),0),spent=monthTx().filter(t=>t.direction==='expense'&&currentBudgets()[t.category]).reduce((s,t)=>s+t.amountMinor,0)/100,bpct=budgetTotal?Math.min(100,spent/budgetTotal*100):0;
  return `${heading('YOUR FINANCIAL SPACE','Your money, in focus.','Here’s what your finances look like this month.')}${demoNotice()}<div class="v2-overview-entry"><button class="v2-ai-entry" onclick="nav('assistant')">${icon('sparkle',16)} Ask Folio · Financial companion →</button>${window.FolioV2&&window.FolioV2.estimatedBalance()!==null?`<span class="v2-mini-balance">Available estimate · ${fmt(window.FolioV2.estimatedBalance(),state.currency)}</span>`:''}</div>${state.monthlyBudgetMinor>0?`<div class="v2-planning-banner"><span>Monthly spending target</span><strong>${fmt(state.monthlyBudgetMinor,state.currency)}</strong><small>${fmt(state.monthlyBudgetMinor-txStats(monthTx()).expense,state.currency)} left after recorded spending · manually planned</small></div>`:''}<div class="metrics">${metric('Net cash flow',stats.net,'net',stats.net>=0?'More coming in than going out':'Spending exceeds income',true)}${metric('Money in',stats.income,'in',`${monthTx().filter(t=>t.direction==='income').length} incoming transactions`)}${metric('Money out',stats.expense,'out',`${monthTx().filter(t=>t.direction==='expense').length} outgoing transactions`)}</div><div class="dashboard-grid"><section class="panel"><div class="panel-heading"><div><h2>Cash flow overview</h2><p>How your money is moving through ${monthTitle()}</p></div><span class="chip">This month</span></div>${cashChart()}</section><section class="panel"><div class="panel-heading"><div><h2>Where money went</h2><p>Expenses by category</p></div><button class="mini-link" onclick="nav('insights')">Explore ${icon('arrow',13)}</button></div>${donut()}</section></div><div class="lower-grid">${recentPanel()}<section class="panel"><div class="panel-heading"><div><h2>Budget snapshot</h2><p>Stay comfortably on track</p></div><button class="mini-link" onclick="nav('budgets')">Manage ${icon('arrow',13)}</button></div><div class="budget-card"><div class="budget-top"><span class="budget-icon">${icon('wallet',19)}</span><span class="chip" style="background:#e1f0db;border-color:#d9eacb">${budgetTotal?Math.round(bpct)+'% used':'Not set'}</span></div><strong>${budgetTotal?fmt(mid(Math.max(0,budgetTotal-spent)),state.currency)+' left to spend':'Make a plan that works'}</strong><p>${budgetTotal?'Across your categories with monthly budgets.':'Set monthly spending limits and watch your progress automatically.'}</p><div class="progress"><span style="width:${bpct}%;background:${bpct>95?'#df806d':'#278a6c'}"></span></div><div class="budget-summary"><span>${fmt(mid(spent),state.currency)} spent</span><span>${fmt(mid(budgetTotal),state.currency)} budget</span></div></div><button class="secondary" style="margin-top:16px;width:100%" onclick="nav('budgets')">View my budgets ${icon('arrow',14)}</button></section></div>`;}
 function transactions(){let list=[...state.transactions].sort((a,b)=>b.occurredAt-a.occurredAt).filter(t=>t.currency===state.currency && (filter==='all'||t.direction===filter) && (`${t.merchant} ${t.category} ${t.source}`.toLowerCase().includes(query.toLowerCase())));let groups={};list.forEach(t=>{let d=new Date(t.occurredAt).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});(groups[d]||(groups[d]=[])).push(t);});
- return `${heading('EVERY MOVEMENT MATTERS','Transactions','Every expense and every deposit, all in one place.')}${demoNotice()}<section class="panel"><div class="panel-heading"><div><h2>All transactions</h2><p>${list.length} ${list.length===1?'transaction':'transactions'} in ${state.currency}</p></div><button class="mini-link" onclick="exportCsv()">${icon('download',14)} Export CSV</button></div><div class="toolbar"><div class="searchbox">${icon('search')}<input aria-label="Search transactions" placeholder="Search merchants or categories..." value="${h(query)}" oninput="setQuery(this.value)"></div><div class="filter-tabs" aria-label="Transaction filters">${[['all','All'],['expense','Expenses'],['income','Income']].map(([id,label])=>`<button class="${filter===id?'active':''}" onclick="setFilter('${id}')">${label}</button>`).join('')}</div></div>${list.length?Object.entries(groups).map(([date,items])=>`<div class="table-group">${h(date)}</div>${items.map(singleTx).join('')}`).join(''):empty('No matching transactions','Try another search or add your first transaction.')}</section>`;}
+ return `${heading('EVERY MOVEMENT MATTERS','Transactions','Every expense and every deposit, all in one place.')}${demoNotice()}<section class="panel"><div class="panel-heading"><div><h2>All transactions</h2><p>${list.length} ${list.length===1?'transaction':'transactions'} in ${state.currency}</p></div><div style="display:flex;gap:12px;flex-wrap:wrap"><button class="mini-link" onclick="chooseImportCsv()">${icon('plus',14)} Import CSV</button><button class="mini-link" onclick="exportCsv()">${icon('download',14)} Export CSV</button></div></div><div class="toolbar"><div class="searchbox">${icon('search')}<input aria-label="Search transactions" placeholder="Search merchants or categories..." value="${h(query)}" oninput="setQuery(this.value)"></div><div class="filter-tabs" aria-label="Transaction filters">${[['all','All'],['expense','Expenses'],['income','Income']].map(([id,label])=>`<button class="${filter===id?'active':''}" onclick="setFilter('${id}')">${label}</button>`).join('')}</div></div>${list.length?Object.entries(groups).map(([date,items])=>`<div class="table-group">${h(date)}</div>${items.map(singleTx).join('')}`).join(''):empty('No matching transactions','Try another search or add your first transaction.')}</section>`;}
 function setQuery(q){query=q;let pos=0;render();let inp=document.querySelector('.searchbox input');if(inp){inp.focus();inp.setSelectionRange(q.length,q.length);}}
 function setFilter(f){filter=f;render();}
 function insights(){let curr=monthTx(),s=txStats(curr),parts=catTotals(curr),total=s.expense,max=parts.length?parts[0][1]:1,months=Array.from({length:6},(_,i)=>{let d=new Date();d.setMonth(d.getMonth()-(5-i));let list=state.transactions.filter(t=>{let x=new Date(t.occurredAt);return x.getMonth()===d.getMonth()&&x.getFullYear()===d.getFullYear()&&t.currency===state.currency;});return {label:d.toLocaleDateString('en-US',{month:'short'}),...txStats(list)};});let maxMonthly=Math.max(1,...months.map(x=>Math.max(x.income,x.expense)));
@@ -145,6 +145,70 @@ function setCurrency(c){state.currency=c;persist();render();notify('Reporting cu
 function toggleCapture(){if(state.demo){notify('Start your private workspace before enabling capture.');return;}if(!state.capture&&!confirm('Folio will analyze new notifications from your approved apps locally to identify transactions. Other messages are discarded. Continue?'))return;state.capture=!state.capture;if(native())try{FolioNative.setCaptureEnabled(state.capture);}catch(e){}persist();render();notify(state.capture?'Capture enabled. Check notification access.':'Capture turned off');}
 function grantAccess(){if(!native()){notify('Install the Android app to grant notification access.');return;}FolioNative.openNotificationSettings();}
 function saveSources(){let area=document.getElementById('sourceInput');let list=[...new Set(area.value.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean))];if(list.some(s=>!(/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(s)))){notify('Use package IDs such as com.google.android.apps.messaging');return;}state.sources=list;if(native())try{FolioNative.setSourcePackages(JSON.stringify(list));}catch(e){}persist();render();notify('Approved sources updated');}
+
+/** Restore records from Folio's original CSV export without uploading any data. */
+function csvRows(text){
+ if(typeof text!=='string'||text.length>2000000)throw Error('CSV is too large (2 MB maximum).');
+ const rows=[];let row=[],field='',inside=false;
+ const csv=text.replace(/^\uFEFF/,'');
+ for(let i=0;i<csv.length;i++){
+  const ch=csv[i];
+  if(ch==='"'){
+   if(inside&&csv[i+1]==='"'){field+='"';i++;}
+   else if(inside)inside=false;
+   else if(field==='')inside=true;
+   else throw Error('Invalid quote in CSV');
+  }else if(ch===','&&!inside){row.push(field);field='';}
+  else if((ch==='\r'||ch==='\n')&&!inside){
+   row.push(field);if(row.some(v=>v.trim()))rows.push(row);
+   row=[];field='';if(ch==='\r'&&csv[i+1]==='\n')i++;
+  }else field+=ch;
+ }
+ if(inside)throw Error('Unclosed quoted field in CSV');
+ row.push(field);if(row.some(v=>v.trim()))rows.push(row);
+ return rows;
+}
+function importFolioCsv(csv){
+ try{
+  const rows=csvRows(csv);
+  if(rows.length<2||rows.length>3001)throw Error('Choose a Folio CSV containing 1–3000 transactions.');
+  const columns=rows[0].map(v=>v.trim().toLowerCase());
+  const required=['date','direction','merchant','category','amount','currency'];
+  if(required.some(v=>!columns.includes(v)))throw Error('This file does not have the expected Folio CSV columns.');
+  const get=(row,name)=>String(row[columns.indexOf(name)]||'').trim();
+  const sourceIndex=columns.indexOf('source');
+  let hash=2166136261;for(let i=0;i<csv.length;i++)hash=Math.imul(hash^csv.charCodeAt(i),16777619)>>>0;
+  const fileTag=hash.toString(16),records=[];
+  for(let i=1;i<rows.length;i++){
+   const line=rows[i],day=get(line,'date'),direction=get(line,'direction').toLowerCase();
+   const merchant=get(line,'merchant'),category=get(line,'category'),currency=get(line,'currency').toUpperCase();
+   const amount=get(line,'amount');
+   if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||!Number.isFinite(new Date(day+'T12:00:00').getTime())||new Date(day+'T12:00:00').toISOString().slice(0,10)!==day)throw Error('Invalid transaction date at row '+(i+1));
+   if(!['income','expense'].includes(direction)||!['EGP','USD','SAR','AED','EUR','GBP'].includes(currency))throw Error('Unsupported currency or direction at row '+(i+1));
+   if(!/^\d+(?:\.\d{1,2})?$/.test(amount)||!Number.isFinite(Number(amount))||Number(amount)<=0||Number(amount)>100000000)throw Error('Invalid amount at row '+(i+1));
+   if(!merchant||merchant.length>150||category.length>100)throw Error('Invalid merchant or category at row '+(i+1));
+   records.push({id:'csv-'+fileTag+'-'+i,merchant,category:CATEGORIES.includes(category)?category:'Other',direction,currency,
+      amountMinor:Math.round(Number(amount)*100),occurredAt:new Date(day+'T12:00:00').getTime(),
+      source:'import',sourcePackage:sourceIndex>=0?String(line[sourceIndex+1]||'').slice(0,140):''});
+  }
+  const seen=new Set(state.transactions.map(t=>t.id));
+  const novel=records.filter(t=>!seen.has(t.id));
+  if(!novel.length){notify('This CSV has already been imported.');return 0;}
+  const backup=state.transactions;
+  state.transactions=[...backup,...novel];
+  if(!persist()){state.transactions=backup;return 0;}
+  render();notify('Restored '+novel.length+' transaction'+(novel.length===1?'':'s')+' from CSV.');
+  return novel.length;
+ }catch(e){notify('CSV import failed: '+e.message);return -1;}
+}
+window.folioImportCsv=importFolioCsv;
+function chooseImportCsv(){
+ if(native()&&typeof FolioNative.pickCsvFile==='function'){FolioNative.pickCsvFile();return;}
+ const input=document.createElement('input');input.type='file';input.accept='.csv,text/csv';
+ input.onchange=()=>{const file=input.files&&input.files[0];if(!file)return;if(file.size>2000000){notify('Choose a CSV smaller than 2 MB.');return;}file.text().then(importFolioCsv).catch(()=>notify('Could not read CSV file.'));};
+ input.click();
+}
+
 function exportCsv(){const quote=s=>'"'+String(s??'').replace(/"/g,'""')+'"';let rows=[['Date','Direction','Merchant','Category','Amount','Currency','Source','Source package'],...state.transactions.map(t=>[new Date(t.occurredAt).toISOString().slice(0,10),t.direction,t.merchant,t.category,(t.amountMinor/100).toFixed(2),t.currency,t.source,t.sourcePackage||''])];let csv=rows.map(r=>r.map(quote).join(',')).join('\r\n');if(native()){try{FolioNative.shareCsv(csv);return;}catch(e){}}let a=document.createElement('a'),url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.href=url;a.download='folio-transactions.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);notify('Export prepared');}
 function refreshNative(){if(!native())return;try{const oldPermission=permissionStatus;permissionStatus=FolioNative.notificationAccessGranted();let gotNew=false;const before=JSON.stringify(captureDiagnostics)+'|'+observedSources.join(',');try{captureDiagnostics=JSON.parse(FolioNative.getCaptureDiagnostics());observedSources=JSON.parse(FolioNative.getObservedSources());}catch(e){}if(!state.demo){const events=JSON.parse(FolioNative.getPendingTransactions());let known=new Set(state.transactions.map(t=>t.id)),received=[];for(let x of events){if(!known.has(x.id)&&Number.isFinite(Number(x.amountMinor))&&x.amountMinor>0&&['income','expense'].includes(x.direction)){state.transactions.push(x);known.add(x.id);received.push(x.id);}}if(events.length){if(persist())FolioNative.ackTransactions(JSON.stringify(events.map(t=>t.id)));if(received.length){gotNew=true;notify(`${received.length} new transaction${received.length===1?'':'s'} imported`);}} }if(gotNew||(page==='settings'&&oldPermission!==permissionStatus)||(page==='overview'&&(oldPermission!==permissionStatus||before!==JSON.stringify(captureDiagnostics)+'|'+observedSources.join(','))))render();}catch(e){console.error('Native import error',e);}}
 window.folioNativeRefresh=refreshNative;
