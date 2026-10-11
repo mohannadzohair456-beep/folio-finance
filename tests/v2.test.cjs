@@ -5,7 +5,7 @@ const inline=html.match(/<script>([\s\S]*?)<\/script>/);assert.ok(inline);
 const storage=new Map();
 const elements=new Map();
 const body={classList:{add(){},remove(){}},appendChild(){}};
-const doc={body,createElement(){return {innerHTML:'',remove(){}}},getElementById(id){if(!elements.has(id))elements.set(id,{innerHTML:'',value:'',focus(){}});return elements.get(id)}};
+const doc={body,createElement(){return {innerHTML:'',remove(){}}},getElementById(id){if(id==='v2-overlay')return null;if(!elements.has(id))elements.set(id,{innerHTML:'',value:'',focus(){}});return elements.get(id)}};
 const sandbox={window:{scrollTo(){}},document:doc,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,String(v))},console,setTimeout:()=>1,setInterval:()=>1,clearTimeout(){},confirm:()=>true};
 sandbox.window=sandbox;sandbox.scrollTo=()=>{};
 const context=vm.createContext(sandbox);
