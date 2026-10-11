@@ -202,6 +202,7 @@ function importFolioCsv(csv){
  }catch(e){notify('CSV import failed: '+e.message);return -1;}
 }
 window.folioImportCsv=importFolioCsv;
+window.folioImportError=message=>notify(message||'CSV import was cancelled.');
 function chooseImportCsv(){
  if(native()&&typeof FolioNative.pickCsvFile==='function'){FolioNative.pickCsvFile();return;}
  const input=document.createElement('input');input.type='file';input.accept='.csv,text/csv';
