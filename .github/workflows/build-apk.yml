@@ -73,6 +73,28 @@ jobs:
           FOLIO_VERSION_CODE: ${{ github.run_number }}
           FOLIO_VERSION_NAME: 0.1.${{ github.run_number }}-test
         run: gradle -p android assembleDebug --no-daemon
+      - name: Verify installable APK integrity and signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.signed_build.outcome }}" = "success" ]; then
+            APK="android/app/build/outputs/apk/release/app-release.apk"
+          else
+            APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          fi
+          test -s "$APK"
+          SDKTOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          echo "::group::APK signature and Android platform compatibility"
+          "$SDKTOOLS/apksigner" verify --verbose --print-certs "$APK"
+          "$SDKTOOLS/aapt" dump badging "$APK" | tee /tmp/folio-apk-badging.txt
+          echo "::endgroup::"
+          echo "::group::ZIP alignment and checksum"
+          "$SDKTOOLS/zipalign" -c -v 4 "$APK"
+          sha256sum "$APK"
+          unzip -t "$APK" | tail -n 2
+          echo "::endgroup::"
+          grep -q "package: name='com.folio.finance'" /tmp/folio-apk-badging.txt
+          grep -q 'sdkVersion:' /tmp/folio-apk-badging.txt
       - name: Upload signed APK
         if: steps.signed_build.outcome == 'success'
         uses: actions/upload-artifact@v4
