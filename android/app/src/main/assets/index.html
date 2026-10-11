@@ -57,7 +57,7 @@ function initDemo(){
  ]};
 }
 function emptyState(){return {demo:false,currency:'EGP',capture:false,sources:['com.google.android.apps.messaging','com.samsung.android.messaging','com.android.mms'],budgets:{},transactions:[]};}
-function load(){try{let o=JSON.parse(localStorage.getItem(STORAGE));if(o&&Array.isArray(o.transactions)){if(o.demo)return {...emptyState(),...o,demo:false,transactions:o.transactions.filter(t=>t.source!=='demo')};return {...emptyState(),...o};}}catch(e){}return emptyState();}
+function load(){try{let o=JSON.parse(localStorage.getItem(STORAGE));if(o&&Array.isArray(o.transactions)){if(o.demo)return {...emptyState(),...o,demo:false,budgets:{},transactions:o.transactions.filter(t=>t.source!=='demo')};return {...emptyState(),...o};}}catch(e){}return emptyState();}
 let state=load(), page='overview', filter='all', query='', currentEdit=null, modalType='expense', toastTimer, permissionStatus=false, captureDiagnostics={allowed:0,parsed:0,unrecognized:0,lastAt:0,lastResult:''}, observedSources=[];
 function persist(){try{localStorage.setItem(STORAGE,JSON.stringify(state));return true;}catch(e){notify('Could not save. Please check your device storage.');return false;}}
 function monthTx(offset=0){const date=new Date(),m=date.getMonth()-offset,y=date.getFullYear();return state.transactions.filter(t=>{const x=new Date(t.occurredAt);return x.getMonth()===((m%12)+12)%12&&x.getFullYear()===y+Math.floor(m/12)&&t.currency===state.currency;});}
