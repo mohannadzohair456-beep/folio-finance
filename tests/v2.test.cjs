@@ -21,6 +21,9 @@ vm.runInContext('FolioV2.nextStep();FolioV2.markReady();nav("assistant")',contex
 assert.ok(doc.getElementById('root').innerHTML.includes('Ask Folio'),'Assistant page works');
 const v=context.window.FolioV2;
 assert.equal(v.detectAmount('20 thousand pounds'),20000,'spoken large amount');
+assert.equal(v.detectAmount('٢٠ ألف جنيه'),20000,'Arabic Egyptian bank amount');
+assert.equal(v.planCommand('مرتبي ١٥ ألف جنيه').action.type,'incomePlan','Arabic voice salary');
+assert.equal(v.planCommand('دفعت ٢٠٠ جنيه في مطعم').action.type,'expense','Arabic voice expense');
 assert.equal(v.planCommand('Can I afford 3000?').action,undefined,'Affordability does not write automatically');
 assert.equal(v.planCommand('I spent 200 on coffee').action.type,'expense');
 assert.equal(v.planCommand('My salary is 15000').action.type,'incomePlan');

@@ -6,9 +6,9 @@
   const amountText=n=>new Intl.NumberFormat('en-US',{maximumFractionDigits:2}).format(n);
   function numberValue(s){
     if(!s)return null;
-    const text=String(s).trim().toLowerCase().replace(/,/g,'');
-    const m=text.match(/(\d+(?:\.\d+)?)\s*(thousand|million|k|m)?\b/);
-    if(m){const v=Number(m[1])*(m[2]==='million'||m[2]==='m'?1000000:m[2]==='thousand'||m[2]==='k'?1000:1);return Number.isFinite(v)&&v>=0&&v<=100000000?v:null;}
+    const text=String(s).trim().toLowerCase().replace(/[٠-٩۰-۹]/g,c=>String(c.charCodeAt(0)>=1776?c.charCodeAt(0)-1776:c.charCodeAt(0)-1632)).replace(/,/g,'');
+    const m=text.match(/(\d+(?:\.\d+)?)\s*(thousand|million|k|m|ألف|الف|آلاف|مليون|ملايين)?(?=\b|\s|$)/);
+    if(m){const v=Number(m[1])*(['million','m','مليون','ملايين'].includes(m[2])?1000000:['thousand','k','ألف','الف','آلاف'].includes(m[2])?1000:1);return Number.isFinite(v)&&v>=0&&v<=100000000?v:null;}
     const ones={zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
     let total=0,group=0,found=false;
     for(const w of text.replace(/-/g,' ').split(/\s+/)){
@@ -20,8 +20,8 @@
     const result=total+group;return found&&result<=100000000?result:null;
   }
   function detectAmount(text){
-    let t=String(text).toLowerCase().replace(/(?:egp|egyptian pounds?|pounds?|جنيه|جنيهات|sar|riyal|usd|dollars?)/gi,' ');
-    const matches=[...t.matchAll(/(\d[\d,]*(?:\.\d+)?\s*(?:thousand|million|k|m)?)/gi)];
+    let t=String(text).toLowerCase().replace(/[٠-٩۰-۹]/g,c=>String(c.charCodeAt(0)>=1776?c.charCodeAt(0)-1776:c.charCodeAt(0)-1632)).replace(/(?:egp|egyptian pounds?|pounds?|جنيه|جنيهات|sar|riyal|usd|dollars?)/gi,' ');
+    const matches=[...t.matchAll(/(\d[\d,]*(?:\.\d+)?\s*(?:thousand|million|k|m|ألف|الف|آلاف|مليون|ملايين)?)/gi)];
     if(matches.length)return numberValue(matches[0][1]);
     const m=t.match(/(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)(?:[\s-]+(?:and|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million))*/i);
     return m?numberValue(m[0]):null;
@@ -59,7 +59,7 @@
   function planCommand(input){
     const raw=String(input||'').trim(),s=raw.toLowerCase().replace(/\s+/g,' '),value=detectAmount(raw);
     if(!raw)return {answer:'Tell me about a balance, budget, salary, expense, or purchase.'};
-    if(/can i afford|can i buy|should i spend|هل اقدر|ينفع اشتري/.test(s)){
+    if(/can i afford|can i buy|should i spend|هل اقدر|هل أقدر|اقدر اشتري|أقدر أشتري|ينفع اشتري/.test(s)){
       if(value===null||value<=0)return {answer:'How much would this purchase cost? Please include an amount.'};
       const {balance,remaining}=financeSummary(),cost=moneyMinor(value);
       if(balance===null)return {answer:'To estimate affordability, first tell me your current available balance. I cannot see your bank account.'};
@@ -72,7 +72,7 @@
     if(/(?:balance|in (?:my |the )?bank|i have|available money|معايا|رصيد)/.test(s)&&value!==null){
       return {answer:`I can record a ${money(moneyMinor(value))} balance snapshot. This is self-reported, not verified with your bank.`,action:{type:'balance',amountMinor:moneyMinor(value),title:'Record balance snapshot'}};
     }
-    if(/salary|monthly income|earn per month|راتبي|مرتب/.test(s)&&value!==null){
+    if(/salary|monthly income|earn per month|راتبي|مرتب|مرتبي/.test(s)&&value!==null){
       return {answer:`Set your expected monthly income to ${money(moneyMinor(value))}? This is a planning estimate and will not create an income transaction.`,action:{type:'incomePlan',amountMinor:moneyMinor(value),title:'Save expected monthly income'}};
     }
     const catMatch=s.match(/(?:budget for|budget on|limit for)\s+([a-z &]+?)\s+(?:is|of|to|at|=)/);
@@ -80,10 +80,10 @@
       const cat=categoryFrom(catMatch[1]);
       return {answer:`Set ${cat} monthly budget to ${money(moneyMinor(value))}?`,action:{type:'categoryBudget',category:cat,amount:value,title:'Set category budget'}};
     }
-    if(/budget|spending limit|ميزانية/.test(s)&&value!==null){
+    if(/budget|spending limit|ميزانية|ميزانيتي/.test(s)&&value!==null){
       return {answer:`Set your overall monthly spending target to ${money(moneyMinor(value))}? This target is separate from your individual category budgets.`,action:{type:'budget',amountMinor:moneyMinor(value),title:'Set monthly budget'}};
     }
-    if(/spent|paid|bought|purchased|expense|صرف|دفعت/.test(s)&&value!==null&&value>0){
+    if(/spent|paid|bought|purchased|expense|صرف|دفعت|اشتريت/.test(s)&&value!==null&&value>0){
       const merchantMatch=s.match(/(?:on|at|for)\s+([a-z][a-z0-9 &'-]{1,50})$/);
       const merchant=merchantMatch?merchantMatch[1].replace(/\b\w/g,c=>c.toUpperCase()):'Voice expense';
       return {answer:`Add a ${money(moneyMinor(value))} expense for ${merchant}? Review it before I save anything.`,action:{type:'expense',amountMinor:moneyMinor(value),merchant,category:categoryFrom(s),title:'Record expense'}};
