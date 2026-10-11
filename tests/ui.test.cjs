@@ -37,4 +37,22 @@ assert.equal(recovered.transactions.length,1,'Manual records retained during mig
 assert.equal(recovered.transactions[0].id,'real');
 assert.equal(Object.keys(recovered.budgets.EGP||{}).length,0,'Demo budget limits removed');
 
+
+const exportedCsv = [
+ '"Date","Direction","Merchant","Category","Amount","Currency","Source","Source package"',
+ '"2026-10-10","expense","Coffee, Sandwiches","Food & drinks","135.50","EGP","manual",""',
+ '"2026-10-11","income","Monthly salary","Salary","15000.00","EGP","manual",""'
+].join('\r\n');
+const restored=boot();
+assert.equal(restored.sandbox.window.folioImportCsv(exportedCsv),2,'Import accepts original Folio CSV format');
+let entries=JSON.parse(restored.data.get('folio_finance_v1')).transactions;
+assert.equal(entries.length,2,'Both income and expense restored');
+assert.equal(entries[0].merchant,'Coffee, Sandwiches','Quoted comma preserved');
+assert.equal(entries[0].amountMinor,13550,'Imported amount stored precisely');
+assert.equal(entries[1].amountMinor,1500000,'Salary restored accurately');
+assert.equal(restored.sandbox.window.folioImportCsv(exportedCsv),0,'Reimporting same file does not duplicate');
+assert.equal(JSON.parse(restored.data.get('folio_finance_v1')).transactions.length,2);
+assert.equal(restored.sandbox.window.folioImportCsv(exportedCsv.replace('"EGP"','"INVALID"')),-1,'Invalid CSV rejected');
+assert.equal(JSON.parse(restored.data.get('folio_finance_v1')).transactions.length,2,'Rejected import leaves stored data unchanged');
+
 console.log('PASS bundled interface and tracking setup checks');
