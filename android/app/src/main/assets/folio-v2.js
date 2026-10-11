@@ -226,6 +226,7 @@
   }
   function render(){
     const root=$('root');if(!root)return;
+    if(native() && typeof FolioNative.setDarkChrome==='function') FolioNative.setDarkChrome(!state.v2Onboarded);
     if(!state.v2Onboarded){root.innerHTML=onbHtml();document.body.classList.add('v2-onboarding');}
     else{document.body.classList.remove('v2-onboarding');root.innerHTML=shell(page==='assistant'?assistantPage():({overview,transactions,insights,budgets,settings})[page]());}
     let existing=$('v2-overlay');if(existing)existing.remove();
