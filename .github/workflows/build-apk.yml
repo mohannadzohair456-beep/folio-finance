@@ -86,7 +86,7 @@ jobs:
           "$TOOLS/zipalign" -c -v 4 "$APK"
           sha256sum "$APK"
           unzip -t "$APK" | tail -n 2
-          grep -q "package: name='com.folio.finance'" /tmp/folio-apk-badging.txt
+          grep -q "package: name='com.folio.finance.app'" /tmp/folio-apk-badging.txt
           grep -q 'sdkVersion:' /tmp/folio-apk-badging.txt
           APK_CERT=$("$TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1)
           if [ "$APK_CERT" != "126a716dad1de9968cfb293aa4c7b3b7567d22d1ccc36cdf62f3fdbc3ce7767f" ]; then

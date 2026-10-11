@@ -5,7 +5,8 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.folio.finance'
+        // Permanent user-facing package. Legacy com.folio.finance debug versions can coexist for safe CSV migration.
+        applicationId 'com.folio.finance.app'
         minSdk 26
         targetSdk 35
         versionCode Integer.parseInt(System.getenv('FOLIO_VERSION_CODE') ?: '1')
