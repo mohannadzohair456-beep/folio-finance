@@ -16,10 +16,19 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.view.Gravity;
+import android.view.View;
+
 
 /** Offline, locally stored UI; no Internet permission required. */
 public final class MainActivity extends Activity {
     private WebView web;
+    private FrameLayout layout;
+    private View loadingOverlay;
     private boolean loaded;
     private static final int VOICE_REQUEST = 7609;
 
@@ -35,6 +44,11 @@ public final class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
                 loaded = true;
+                if (loadingOverlay != null && layout != null) {
+                    web.animate().alpha(1f).setDuration(200).start();
+                    layout.removeView(loadingOverlay);
+                    loadingOverlay = null;
+                }
                 refresh();
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return true; }
@@ -50,7 +64,28 @@ public final class MainActivity extends Activity {
         settings.setSupportZoom(false);
         WebView.setWebContentsDebuggingEnabled(false);
         web.addJavascriptInterface(new NativeApi(), "FolioNative");
-        setContentView(web);
+        layout = new FrameLayout(this);
+        layout.setBackgroundColor(Color.rgb(12,44,35));
+        web.setAlpha(0f);
+        layout.addView(web,new FrameLayout.LayoutParams(-1,-1));
+        LinearLayout brand = new LinearLayout(this);
+        brand.setOrientation(LinearLayout.VERTICAL);
+        brand.setGravity(Gravity.CENTER);
+        brand.setBackgroundColor(Color.rgb(12,44,35));
+        ProgressBar spinner = new ProgressBar(this);
+        if (spinner.getIndeterminateDrawable()!=null) spinner.getIndeterminateDrawable().setTint(Color.rgb(197,241,116));
+        brand.addView(spinner,new LinearLayout.LayoutParams(64,64));
+        TextView label = new TextView(this);
+        label.setText("folio.");
+        label.setTextColor(Color.rgb(243,255,247));
+        label.setTextSize(26f);
+        label.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1,60);
+        lp.topMargin=18;
+        brand.addView(label,lp);
+        loadingOverlay=brand;
+        layout.addView(loadingOverlay,new FrameLayout.LayoutParams(-1,-1));
+        setContentView(layout);
         web.loadUrl("file:///android_asset/index.html");
     }
     @Override protected void onResume() { super.onResume(); refresh(); }
@@ -80,6 +115,14 @@ public final class MainActivity extends Activity {
     }
 
     public final class NativeApi {
+        @JavascriptInterface public void setDarkChrome(boolean dark) {
+            runOnUiThread(() -> {
+                getWindow().setStatusBarColor(dark?Color.rgb(12,44,35):Color.rgb(246,247,250));
+                getWindow().setNavigationBarColor(dark?Color.rgb(12,44,35):Color.rgb(247,248,250));
+                getWindow().getDecorView().setSystemUiVisibility(dark?0:
+                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            });
+        }
         @JavascriptInterface public void startVoiceRecognition(String locale) {
             runOnUiThread(() -> {
                 try {
