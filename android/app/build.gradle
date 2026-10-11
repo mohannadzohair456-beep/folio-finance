@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.folio.finance'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.folio.finance'
+        minSdk 26
+        targetSdk 35
+        versionCode Integer.parseInt(System.getenv('FOLIO_VERSION_CODE') ?: '1')
+        versionName System.getenv('FOLIO_VERSION_NAME') ?: '0.1.0'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    def signingPath = System.getenv('FOLIO_SIGNING_STORE_FILE')
+    def signingPassword = System.getenv('FOLIO_SIGNING_PASSWORD')
+    if (signingPath && signingPassword) {
+        signingConfigs {
+            release {
+                storeFile file(signingPath)
+                storeType 'pkcs12'
+                storePassword signingPassword
+                keyAlias 'folio'
+                keyPassword signingPassword
+            }
+        }
+        buildTypes { release { signingConfig signingConfigs.release } }
+    }
+}
