@@ -43,89 +43,68 @@ jobs:
         run: node tests/ui.test.cjs
       - name: Test onboarding and Folio assistant
         run: node tests/v2.test.cjs
-      - name: Configure signing
-        id: signing
+      - name: Verify permanent signing identity
+        shell: bash
         env:
           KEY_B64: ${{ secrets.FOLIO_KEYSTORE_B64 }}
           KEY_PASS: ${{ secrets.FOLIO_SIGNING_PASSWORD }}
         run: |
-          if [ -n "$KEY_B64" ] && [ -n "$KEY_PASS" ]; then
-            printf '%s' "$KEY_B64" | base64 --decode > "$RUNNER_TEMP/folio-release.p12"
-            chmod 600 "$RUNNER_TEMP/folio-release.p12"
-            echo "signed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Signing secrets absent. TEST APK only; future updates must use the stable release key."
-            echo "signed=false" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ -z "$KEY_B64" ] || [ -z "$KEY_PASS" ]; then
+            echo "::error::Permanent signing secrets missing. Configure FOLIO_KEYSTORE_B64 and FOLIO_SIGNING_PASSWORD in repository Actions secrets."
+            exit 1
           fi
-      - name: Build updateable signed release
-        id: signed_build
-        continue-on-error: true
-        if: steps.signing.outputs.signed == 'true'
+          printf '%s' "$KEY_B64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/folio-release.p12"
+          chmod 600 "$RUNNER_TEMP/folio-release.p12"
+          if ! keytool -list -keystore "$RUNNER_TEMP/folio-release.p12" -storetype PKCS12 -storepass "$KEY_PASS" -alias folio >/dev/null 2>&1; then
+            echo "::error::Invalid signing password, keystore or alias. Re-enter both Actions secrets from your original PRIVATE signing kit. Do not commit the kit."
+            exit 1
+          fi
+          EXPECTED_CERT="126a716dad1de9968cfb293aa4c7b3b7567d22d1ccc36cdf62f3fdbc3ce7767f"
+          FOUND_CERT=$(keytool -exportcert -alias folio -keystore "$RUNNER_TEMP/folio-release.p12" -storetype PKCS12 -storepass "$KEY_PASS" | sha256sum | awk '{print $1}')
+          if [ "$FOUND_CERT" != "$EXPECTED_CERT" ]; then
+            echo "::error::Signing identity differs from the approved Folio release certificate. Refusing to rotate update identity."
+            exit 1
+          fi
+          echo "Folio permanent certificate verified: $FOUND_CERT"
+      - name: Build permanently signed release
         env:
           FOLIO_SIGNING_STORE_FILE: ${{ runner.temp }}/folio-release.p12
           FOLIO_SIGNING_PASSWORD: ${{ secrets.FOLIO_SIGNING_PASSWORD }}
           FOLIO_VERSION_CODE: ${{ github.run_number }}
-          FOLIO_VERSION_NAME: 0.1.${{ github.run_number }}
+          FOLIO_VERSION_NAME: 0.2.${{ github.run_number }}
         run: gradle -p android assembleRelease --no-daemon
-      - name: Build installable test APK
-        if: steps.signed_build.outcome != 'success'
-        env:
-          FOLIO_VERSION_CODE: ${{ github.run_number }}
-          FOLIO_VERSION_NAME: 0.1.${{ github.run_number }}-test
-        run: gradle -p android assembleDebug --no-daemon
-      - name: Verify installable APK integrity and signing
+      - name: Verify signed APK integrity and compatibility
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ steps.signed_build.outcome }}" = "success" ]; then
-            APK="android/app/build/outputs/apk/release/app-release.apk"
-          else
-            APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          fi
+          APK="android/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
-          SDKTOOLS="$ANDROID_HOME/build-tools/35.0.0"
-          echo "::group::APK signature and Android platform compatibility"
-          "$SDKTOOLS/apksigner" verify --verbose --print-certs "$APK"
-          "$SDKTOOLS/aapt" dump badging "$APK" | tee /tmp/folio-apk-badging.txt
-          echo "::endgroup::"
-          echo "::group::ZIP alignment and checksum"
-          "$SDKTOOLS/zipalign" -c -v 4 "$APK"
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          "$TOOLS/aapt" dump badging "$APK" | tee /tmp/folio-apk-badging.txt
+          "$TOOLS/zipalign" -c -v 4 "$APK"
           sha256sum "$APK"
           unzip -t "$APK" | tail -n 2
-          echo "::endgroup::"
           grep -q "package: name='com.folio.finance'" /tmp/folio-apk-badging.txt
           grep -q 'sdkVersion:' /tmp/folio-apk-badging.txt
-      - name: Upload signed APK
-        if: steps.signed_build.outcome == 'success'
+          APK_CERT=$("$TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+          if [ "$APK_CERT" != "126a716dad1de9968cfb293aa4c7b3b7567d22d1ccc36cdf62f3fdbc3ce7767f" ]; then
+            echo "::error::Built APK certificate is not the pinned Folio release identity"
+            exit 1
+          fi
+      - name: Upload permanent signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: Folio-Signed-APK
+          name: Folio-Updateable-Signed-APK
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
-      - name: Upload test APK
-        if: steps.signed_build.outcome != 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Folio-TEST-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 30
-      - name: Publish test APK as GitHub prerelease
-        if: steps.signed_build.outcome != 'success'
+      - name: Publish permanent release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: folio-test-${{ github.run_number }}
-          name: Folio test build #${{ github.run_number }}
-          prerelease: true
-          make_latest: false
-          files: android/app/build/outputs/apk/debug/app-debug.apk
-      - name: Publish signed release
-        if: steps.signed_build.outcome == 'success'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v0.1.${{ github.run_number }}
-          name: Folio v0.1.${{ github.run_number }}
+          tag_name: v0.2.${{ github.run_number }}
+          name: Folio v0.2.${{ github.run_number }}
           make_latest: true
           generate_release_notes: true
           files: android/app/build/outputs/apk/release/app-release.apk
