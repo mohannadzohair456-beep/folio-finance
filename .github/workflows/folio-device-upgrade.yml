@@ -59,6 +59,59 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  upgrade-from-schema1:
+    # Runs after a signed build is published. A push of this file alone still
+    # has the previous release as "latest", so it cannot upgrade schema 1 yet.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the UI driver
+        uses: actions/checkout@v4
+      - name: Download schema 1 (v0.3.46) and the current signed release
+        run: |
+          set -euo pipefail
+          # v0.3.46 is the signed schema-1 release published before schema 2.
+          # releases/latest moves when a newer signed build is published, so the
+          # old APK stays pinned and the new APK is whatever just shipped.
+          curl -fL --retry 3 --output /tmp/folio-schema1.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/download/v0.3.46/app-release.apk
+          curl -fL --retry 3 --output /tmp/folio-current.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/latest/download/app-release.apk
+          python3 -c 'import pathlib,sys
+          for path in sys.argv[1:]:
+              data=pathlib.Path(path).read_bytes()
+              if data[:4]!=b"PK\x03\x04": raise SystemExit(path+" is not an apk")
+              print(path, len(data))' /tmp/folio-schema1.apk /tmp/folio-current.apk
+          sha256sum /tmp/folio-schema1.apk /tmp/folio-current.apk
+          if cmp -s /tmp/folio-schema1.apk /tmp/folio-current.apk; then
+            echo "::error::The published release is still schema 1 (v0.3.46). This job enters data on that APK and upgrades to a newer signed release."
+            exit 1
+          fi
+      - name: Install UI text tools
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - name: Prepare KVM
+        run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Enter data on schema 1, upgrade in place, read it back
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048
+          disable-animations: true
+          emulator-boot-timeout: 720
+          script: python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" upgrade --old /tmp/folio-schema1.apk --new /tmp/folio-current.apk --expect-old 0.3.46 --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/upgrade-schema1-api34"
+      - name: Upload schema-1 upgrade screenshots and UI dumps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-upgrade-schema1-api34
+          path: emulator-artifacts/upgrade-schema1-api34
+          if-no-files-found: warn
+          retention-days: 14
+
   clean-launch:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest

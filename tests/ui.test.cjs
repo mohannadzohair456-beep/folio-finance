@@ -15,10 +15,11 @@ assert.ok(h.includes("connect-src 'none'"),'CSP blocks network requests');
 assert.ok(h.includes('if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}'),'Live notifications should refresh');
 
 // Execute the actual bundled application with a minimal WebView-like browser mock.
-function boot(seed){
+function boot(seed, extra){
  const data=new Map(seed?[['folio_finance_v1',JSON.stringify(seed)]]:[]);
+ if(extra){ for(const [key,value] of Object.entries(extra)) data.set(key, value); }
  const nodes=new Map();
- const doc={getElementById(id){if(!nodes.has(id))nodes.set(id,{innerHTML:'',value:''});return nodes.get(id);}};
+ const doc={getElementById(id){if(!nodes.has(id))nodes.set(id,{innerHTML:'',value:'',focus(){}});return nodes.get(id);}};
  const localStorage={getItem:k=>data.get(k)||null,setItem:(k,v)=>data.set(k,String(v))};
  const sandbox=vm.createContext({window:{},document:doc,localStorage,console,confirm:()=>true,setTimeout:()=>0,clearTimeout:()=>{},setInterval:()=>0});
  new vm.Script(script[1]).runInContext(sandbox);
@@ -139,7 +140,7 @@ assert.equal(savedBooks.transactions.length, 4);
 assert.ok(savedBooks.transactions.some(row=>row&&row.occurredAt==='not-a-date'));
 
 const paydayBoot = boot();
-assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).schemaVersion, 1);
+assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).schemaVersion, 2);
 assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).experimentalPaydayRunway, false);
 assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).paydayAmountMinor, null);
 paydayBoot.sandbox.window.scrollTo = () => {};
@@ -164,11 +165,109 @@ assert.equal(paydaySaved.savingsReservedMinor, 0);
 assert.equal(paydaySaved.emergencyReserveMinor, null);
 assert.deepEqual(paydaySaved.commitments, []);
 assert.equal(paydaySaved.upcomingBills, null);
-assert.equal(paydaySaved.schemaVersion, 1);
+assert.equal(paydaySaved.schemaVersion, 2);
 paydayBoot.doc.getElementById('payday-amount').value = '12.345';
 vm.runInContext('savePaydayRunway({preventDefault(){}})', paydayBoot.sandbox);
 assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).paydayAmountMinor, 1500050, 'an invalid amount does not replace stored minor units');
 assert.equal(savedBooks.experimentalPaydayRunway, false);
-assert.equal(savedBooks.schemaVersion, 1);
+assert.equal(savedBooks.schemaVersion, 2);
+
+const reviewBoot = boot({
+  schemaVersion: 1,
+  demo: false,
+  currency: 'EGP',
+  v2Onboarded: true,
+  transactions: [
+    { id: 'salary', source: 'manual', currency: 'EGP', direction: 'income', amountMinor: 100000, merchant: 'Salary', category: 'Salary', occurredAt: Date.now() },
+    { id: 'talabat', source: 'notification', review: true, currency: 'EGP', direction: 'expense', amountMinor: 4500, merchant: 'Talabat', category: 'Food & drinks', occurredAt: Date.now(), sourcePackage: 'com.example.bank' },
+    { id: 'dup', source: 'notification', review: true, status: 'duplicate-candidate', currency: 'EGP', direction: 'expense', amountMinor: 4500, merchant: 'Talabat again', category: 'Food & drinks', occurredAt: Date.now() }
+  ]
+});
+reviewBoot.sandbox.window.scrollTo = () => {};
+assert.equal(vm.runInContext('txStats(monthTx()).expense', reviewBoot.sandbox), 0, 'suggested and duplicate-candidate rows are not in the month total');
+vm.runInContext("nav('transactions')", reviewBoot.sandbox);
+const reviewHtml = reviewBoot.doc.getElementById('root').innerHTML;
+assert.ok(reviewHtml.includes('aria-label="Confirm Talabat"'), 'review row offers confirm');
+assert.ok(reviewHtml.includes('aria-label="Reject Talabat"'), 'review row offers reject');
+assert.ok(reviewHtml.includes('aria-label="Edit Talabat"'), 'review row offers edit');
+assert.ok(reviewHtml.includes('Auto-detected · Review'));
+assert.ok(reviewHtml.includes('Possible duplicate · Review'));
+assert.ok(reviewHtml.includes('aria-label="Confirm Talabat again"'));
+vm.runInContext('reviewTransaction("talabat","confirmed")', reviewBoot.sandbox);
+const confirmedRow = JSON.parse(reviewBoot.data.get('folio_finance_v1')).transactions.find(t => t.id === 'talabat');
+assert.equal(confirmedRow.status, 'confirmed');
+assert.equal(confirmedRow.review, false);
+assert.equal(confirmedRow.source, 'notification');
+assert.equal(confirmedRow.sourcePackage, 'com.example.bank');
+assert.equal(confirmedRow.amountMinor, 4500);
+assert.ok(Number.isFinite(confirmedRow.reviewedAt));
+assert.equal(vm.runInContext('txStats(monthTx()).expense', reviewBoot.sandbox), 4500, 'a confirmed notification joins the month total');
+vm.runInContext('reviewTransaction("dup","rejected")', reviewBoot.sandbox);
+const rejectedRow = JSON.parse(reviewBoot.data.get('folio_finance_v1')).transactions.find(t => t.id === 'dup');
+assert.equal(rejectedRow.status, 'rejected');
+assert.equal(rejectedRow.review, false);
+assert.equal(vm.runInContext('txStats(monthTx()).expense', reviewBoot.sandbox), 4500, 'a rejected row stays out of the month total');
+vm.runInContext("editById('dup')", reviewBoot.sandbox);
+reviewBoot.doc.getElementById('txmerchant').value = 'Talabat edited';
+reviewBoot.doc.getElementById('txamount').value = '45.00';
+reviewBoot.doc.getElementById('txcurrency').value = 'EGP';
+reviewBoot.doc.getElementById('txcategory').value = 'Food & drinks';
+reviewBoot.doc.getElementById('txdate').value = new Date().toISOString().slice(0, 10);
+vm.runInContext('saveTransaction({preventDefault(){}})', reviewBoot.sandbox);
+const editedRow = JSON.parse(reviewBoot.data.get('folio_finance_v1')).transactions.find(t => t.id === 'dup');
+assert.equal(editedRow.merchant, 'Talabat edited');
+assert.equal(editedRow.status, 'confirmed');
+assert.equal(editedRow.source, 'notification');
+assert.equal(editedRow.amountMinor, 4500);
+
+const priorSnapshot=JSON.stringify({folioSnapshot:'premigration',fromSchema:0,toSchema:1,state:{marker:'schema0',budgets:{EGP:{Shopping:3500}}}});
+const keptSnapshot=boot({
+  schemaVersion:1,
+  currency:'EGP',
+  v2Onboarded:true,
+  budgets:{EGP:{Shopping:4000}},
+  transactions:[{id:'keep',source:'manual',currency:'EGP',direction:'expense',amountMinor:12550,merchant:'Carrefour',category:'Food & drinks',occurredAt:Date.now()}]
+},{folio_finance_premigration_snapshot:priorSnapshot});
+assert.equal(keptSnapshot.data.get('folio_finance_premigration_snapshot'), priorSnapshot, 'schema 2 does not replace a snapshot taken earlier');
+const keptState=JSON.parse(keptSnapshot.data.get('folio_finance_v1'));
+assert.equal(keptState.schemaVersion, 2);
+assert.equal(keptState.budgets.EGP.Shopping, 4000, 'schema 1 budgets stay minor units');
+assert.equal(keptState.transactions[0].status, 'confirmed');
+assert.equal(keptState.transactions[0].merchant, 'Carrefour');
+
+const schema1=boot({
+  schemaVersion:1,
+  currency:'EGP',
+  v2Onboarded:true,
+  budgets:{EGP:{Shopping:2500}},
+  transactions:[{id:'market',source:'notification',review:true,currency:'EGP',direction:'expense',amountMinor:4500,merchant:'Talabat',category:'Food & drinks',occurredAt:Date.now()}]
+});
+const written=schema1.data.get('folio_finance_premigration_snapshot');
+const writtenSnapshot=JSON.parse(written);
+assert.equal(writtenSnapshot.folioSnapshot, 'premigration');
+assert.equal(writtenSnapshot.fromSchema, 1);
+assert.equal(writtenSnapshot.toSchema, 2);
+assert.equal(writtenSnapshot.state.schemaVersion, 1);
+assert.equal(writtenSnapshot.state.budgets.EGP.Shopping, 2500, 'the snapshot keeps the pre-migration budget');
+assert.equal(writtenSnapshot.state.transactions[0].review, true);
+assert.equal(writtenSnapshot.state.transactions[0].status, undefined);
+assert.equal(JSON.parse(schema1.data.get('folio_finance_v1')).transactions[0].status, 'suggested');
+const second=boot(JSON.parse(schema1.data.get('folio_finance_v1')),{folio_finance_premigration_snapshot:written});
+assert.equal(second.data.get('folio_finance_premigration_snapshot'), written, 'a second launch leaves the snapshot alone');
+
+for (const name of ['folio-data.js','assistant.js','payday-runway.js','folio-v2.js']) {
+  const source=fs.readFileSync('android/app/src/main/assets/'+name,'utf8');
+  assert.equal(source.includes('?.'), false, name+' is parsed by the Android 8 WebView, so it cannot use optional chaining');
+  assert.equal(source.includes('??'), false, name+' is parsed by the Android 8 WebView, so it cannot use nullish coalescing');
+}
+assert.equal(h.includes('?.'), false, 'bundled page cannot use optional chaining');
+assert.equal(h.includes('??'), false, 'bundled page cannot use nullish coalescing');
+
+const upgradeYml=fs.readFileSync('.github/workflows/folio-device-upgrade.yml','utf8');
+const upgradeDriver=fs.readFileSync('.github/scripts/folio_device_drive.py','utf8');
+assert.ok(upgradeYml.includes('releases/download/v0.2.33/app-release.apk'), 'v0.2.33 upgrade stays');
+assert.ok(upgradeYml.includes('releases/download/v0.3.46/app-release.apk'), 'schema 1 upgrade uses the published v0.3.46 APK');
+assert.ok(upgradeYml.includes('--expect-old 0.3.46'), 'schema 1 upgrade checks the installed version');
+assert.ok(upgradeDriver.includes('expect_old'), 'the driver can expect a version other than v0.2.33');
 
 console.log('PASS bundled interface and tracking setup checks');

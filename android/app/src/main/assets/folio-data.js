@@ -1,11 +1,15 @@
 /* Folio data layer. No DOM and no network.
    Schema 0 (missing schemaVersion): category budgets are major-unit numbers.
    Schema 1: category budgets are integer minor units (piasters/cents/halalas).
+   Schema 2: each transaction has status suggested, confirmed, rejected, or
+   duplicate-candidate. Existing rows become confirmed. A notification row
+   flagged review:true becomes suggested. Budgets are not converted again.
    Planning fields monthlyBudgetMinor, monthlyIncomeMinor and reportedBalanceMinor
    were already minor units before schema 1 and are never multiplied again. */
 (function (root) {
   'use strict';
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 2;
+  const BUDGET_MINOR_SCHEMA = 1;
   const STORAGE_KEY = 'folio_finance_v1';
   const SNAPSHOT_KEY = 'folio_finance_premigration_snapshot';
   const RESTORE_SNAPSHOT_KEY = 'folio_finance_pre_restore_snapshot';
@@ -79,6 +83,7 @@
         occurredAt: 0,
         source: 'legacy',
         incomplete: true,
+        status: 'confirmed',
         legacyRaw: entry === undefined ? null : entry
       };
     }
@@ -110,7 +115,28 @@
       copy.legacyOccurredAt = copy.occurredAt;
       copy.occurredAt = when;
     }
+    copy.status = transactionStatus(copy);
     return copy;
+  }
+
+  function canonicalTxStatus(value) {
+    if (typeof value !== 'string') return null;
+    const text = value.trim().toLowerCase().replace(/[\s_]+/g, '-');
+    if (text === 'suggested' || text === 'unconfirmed') return 'suggested';
+    if (text === 'confirmed') return 'confirmed';
+    if (text === 'rejected') return 'rejected';
+    if (text === 'duplicate-candidate' || text === 'duplicatecandidate') return 'duplicate-candidate';
+    return null;
+  }
+
+  /* Explicit status wins. Otherwise a notification still flagged for review
+     is suggested, and every older row is confirmed. */
+  function transactionStatus(entry) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'confirmed';
+    const explicit = canonicalTxStatus(entry.status);
+    if (explicit) return explicit;
+    if (entry.source === 'notification' && entry.review === true) return 'suggested';
+    return 'confirmed';
   }
 
   function walkBudgets(budgets, legacy, convert) {
@@ -263,7 +289,7 @@
     if (legacyDemo) {
       state.budgets = {};
       if (input.budgets != null) state.legacyDemoBudgets = clone(input.budgets);
-    } else if (fromSchema < SCHEMA_VERSION) {
+    } else if (fromSchema < BUDGET_MINOR_SCHEMA) {
       state.budgets = walkBudgets(input.budgets, legacyBudgets, majorToMinor);
     } else {
       state.budgets = walkBudgets(input.budgets, legacyBudgets, value => {
@@ -313,7 +339,7 @@
     state[key] = parsed.value;
   }
 
-  /* New optional fields. Schema stays 1. Null means the user has not answered;
+  /* Optional payday fields. Null means the user has not answered;
      an empty list means they confirmed there is nothing. */
   function assignRunway(state, input) {
     state.experimentalPaydayRunway = input.experimentalPaydayRunway === true;
@@ -549,7 +575,8 @@
         occurredAt: when,
         source: 'import',
         sourcePackage: cell('sourcePackage').slice(0, 140),
-        importedSource: cell('source').slice(0, 40)
+        importedSource: cell('source').slice(0, 40),
+        status: 'confirmed'
       });
     }
     return records;
@@ -565,6 +592,7 @@
     majorToMinor: majorToMinor,
     transactionTime: transactionTime,
     migrate: migrate,
+    transactionStatus: transactionStatus,
     summarize: summarize,
     budgetTotalMinor: budgetTotalMinor,
     buildBackup: buildBackup,

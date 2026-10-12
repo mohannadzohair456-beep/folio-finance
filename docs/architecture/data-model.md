@@ -8,10 +8,13 @@ Folio keeps the books on the device. The WebView page is still loaded from `file
 | --- | --- | --- | --- |
 | 0 (no `schemaVersion`) | `localStorage['folio_finance_v1']` | Major units, such as `3500` or `3500.5` | `monthlyBudgetMinor`, `monthlyIncomeMinor`, and `reportedBalanceMinor` were already minor units |
 | 1 | Same key | Integer minor units (piasters, cents, halalas) | Unchanged minor units. They are not multiplied again |
+| 2 | Same key | Unchanged integer minor units | Unchanged minor units. Each transaction gains `status` |
 
-`FolioData.SCHEMA_VERSION` is `1`. Transactions have used `amountMinor` since the first build. Supported currencies are EGP, USD, SAR, AED, EUR, and GBP. Every one of those uses 2 decimal places, so minor units are `major * 100`.
+`FolioData.SCHEMA_VERSION` is `2`. Transactions have used `amountMinor` since the first build. Supported currencies are EGP, USD, SAR, AED, EUR, and GBP. Every one of those uses 2 decimal places, so minor units are `major * 100`.
 
-A category budget of 3500 EGP in schema 0 becomes `350000`. A second launch sees `schemaVersion: 1` and leaves `350000` alone.
+A category budget of 3500 EGP in schema 0 becomes `350000`. A later launch sees `schemaVersion` of 1 or 2 and leaves `350000` alone.
+
+Schema 2 adds `status` on every transaction: `suggested`, `confirmed`, `rejected`, or `duplicate-candidate`. A row that already has one of those values keeps it. A notification with `review: true` and no status becomes `suggested`. Every other existing row becomes `confirmed`. Rejected, suggested, and duplicate-candidate rows stay in the workspace and stay out of monthly totals until a person confirms them. Confirm, reject, and edit are on the existing auto-detected review row.
 
 Rows that are missing a merchant, amount, direction, or even a usable object are kept. Demo rows (`source: 'demo'` while `demo: true`) are still removed, which is the existing sample-data transition. Unparseable budget cells are copied to `legacyUnparsedBudgets` instead of being deleted. A storage value that is not JSON is left in the pre-migration snapshot and the working copy starts empty so the page can open.
 
@@ -19,7 +22,7 @@ A v0.2.33 workspace can omit `transactions` and still keep its budgets and repor
 
 ## Pre-migration snapshot
 
-The first time schema 0 (or a demo workspace) is opened, Folio writes `localStorage['folio_finance_premigration_snapshot']` if that key is empty. The value is:
+The first time an older workspace is opened, Folio writes `localStorage['folio_finance_premigration_snapshot']` if that key is empty. That includes schema 0, a demo workspace, and a schema 1 workspace opened by schema 2. The value is:
 
 ```json
 {
@@ -30,7 +33,7 @@ The first time schema 0 (or a demo workspace) is opened, Folio writes `localStor
 }
 ```
 
-`state` is the object from before conversion. Later launches do not overwrite it. A JSON restore writes a separate `folio_finance_pre_restore_snapshot` and does not touch the pre-migration snapshot.
+`state` is the object from before conversion. `toSchema` is the schema being migrated to. Later launches do not overwrite the key, so a snapshot taken on the way from schema 0 to schema 1 is still there after schema 2 opens. A JSON restore writes a separate `folio_finance_pre_restore_snapshot` and does not touch the pre-migration snapshot.
 
 ## JSON backup
 

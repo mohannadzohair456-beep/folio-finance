@@ -448,7 +448,7 @@ def assert_apk(path):
         raise DriveError(path + " is not an APK")
 
 
-def upgrade(driver, old_apk, new_apk):
+def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     assert_apk(old_apk)
     assert_apk(new_apk)
     driver.wake()
@@ -456,8 +456,8 @@ def upgrade(driver, old_apk, new_apk):
     driver.install(old_apk, replace=False)
     code, name = driver.version_line()
     print("installed old", name, code, flush=True)
-    if name != "0.2.33":
-        raise DriveError("expected v0.2.33, installed " + name)
+    if name != expect_old:
+        raise DriveError("expected " + expect_old + ", installed " + name)
     driver.launch()
     driver.wait_for("Meet Folio", timeout=50)
     driver.shot("onboarding")
@@ -571,6 +571,7 @@ def main():
     parser.add_argument("--apk")
     parser.add_argument("--old")
     parser.add_argument("--new")
+    parser.add_argument("--expect-old", default="0.2.33")
     parser.add_argument("--artifacts", required=True)
     args = parser.parse_args()
     driver = Driver(Path(args.artifacts))
@@ -578,7 +579,7 @@ def main():
         if args.mode == "upgrade":
             if not args.old or not args.new:
                 raise DriveError("upgrade needs --old and --new")
-            upgrade(driver, args.old, args.new)
+            upgrade(driver, args.old, args.new, args.expect_old)
         else:
             if not args.apk:
                 raise DriveError("launch needs --apk")
