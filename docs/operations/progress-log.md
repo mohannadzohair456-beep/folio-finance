@@ -34,6 +34,12 @@ The experimental Payday Money Runway is local and off until Settings turns it on
 
 Local commands that passed on this branch before the pull request: `node tests/payday-runway.test.cjs` (71 checks), `node tests/money.test.cjs`, `node tests/assistant.test.cjs`, `node tests/ui.test.cjs`, and `node tests/v2.test.cjs`. Pull request https://github.com/mohannadzohair456-beep/folio-finance/pull/10 is merged to main as `67ae48e` (squash of `7a93591` and `b2f33b8`). PR CI succeeded: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38247265381. The signed build of `67ae48e` succeeded: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38248160489. The device upgrade of that signed APK succeeded, including the in-place upgrade from v0.2.33 and clean launches on API 26 and API 35: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38248277717. Earlier upgrade runs on `76a9f6d` covered the previous signed release only.
 
+## Update — 12 Oct 2026, transaction statuses
+
+Schema is now 2. Category budgets still convert from major units only when the stored schema is below 1, so a schema 1 budget is not multiplied again. Each transaction gets `status`: `suggested`, `confirmed`, `rejected`, or `duplicate-candidate`. A row that already has one of those keeps it. A notification with `review: true` and no status becomes `suggested`. Every other existing row, including CSV imports and notifications that were not flagged for review, becomes `confirmed`. Suggested, rejected, and duplicate-candidate rows stay in the workspace and stay out of monthly totals and the estimated balance until someone confirms them.
+
+The existing auto-detected review row now has Confirm, Reject, and Edit. Confirm and reject record `reviewedAt` and clear the review flag. Edit opens the current transaction form, keeps the notification source, and saves the row as confirmed. The parser and the notification dedup rules are unchanged. P0.3, per-account balance freshness, is not in this change.
+
 ## Not done
 
 These three bullets described the tree at `f422d13`. The task board's 12 Oct 2026 baseline later records a signed v0.3.43 release. They are not the status of the payday runway change above.

@@ -30,7 +30,7 @@
   function estimatedBalance(){
     if(!Number.isFinite(state.reportedBalanceMinor)||!state.balanceReportedAt)return null;
     let delta=0;
-    for(const t of state.transactions){if(t.currency!==state.currency||!Number.isFinite(Number(t.amountMinor))||Number(t.occurredAt)<state.balanceReportedAt)continue;
+    for(const t of state.transactions){if(!t||t.currency!==state.currency||!Number.isFinite(Number(t.amountMinor))||Number(t.occurredAt)<state.balanceReportedAt)continue;if(window.FolioData&&FolioData.transactionStatus(t)!=='confirmed')continue;
       delta+=(t.direction==='income'?1:t.direction==='expense'?-1:0)*Number(t.amountMinor);
     }
     return state.reportedBalanceMinor+delta;
@@ -135,7 +135,7 @@
     else if(a.type==='budget')state.monthlyBudgetMinor=a.amountMinor;
     else if(a.type==='categoryBudget'){const minor=Number.isFinite(Number(a.amountMinor))?Math.round(Number(a.amountMinor)):Math.round(Number(a.amount)*100);currentBudgets()[a.category]=minor;}
     else if(a.type==='expense'||a.type==='income'){
-      state.transactions.push({id:'assistant-'+timestamp+'-'+Math.random().toString(36).slice(2,7),amountMinor:a.amountMinor,currency:a.currency||state.currency,direction:a.type,merchant:a.merchant,category:a.category,occurredAt:timestamp,source:'assistant'});
+      state.transactions.push({id:'assistant-'+timestamp+'-'+Math.random().toString(36).slice(2,7),amountMinor:a.amountMinor,currency:a.currency||state.currency,direction:a.type,merchant:a.merchant,category:a.category,occurredAt:timestamp,source:'assistant',status:'confirmed',review:false});
     }
     else if(a.type==='savingsGoal'){
       const minor=Math.round(Number(a.amountMinor));

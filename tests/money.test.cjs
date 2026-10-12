@@ -6,7 +6,7 @@ const sandbox = {};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync('android/app/src/main/assets/folio-data.js', 'utf8'), sandbox);
 const FolioData = sandbox.FolioData;
-assert.equal(FolioData.SCHEMA_VERSION, 1);
+assert.equal(FolioData.SCHEMA_VERSION, 2);
 // Objects created inside the vm have a different prototype, so compare JSON.
 const same = (actual, expected, message) => assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
 
@@ -29,7 +29,7 @@ const legacy = {
   ]
 };
 const migrated = FolioData.migrate(legacy, null);
-assert.equal(migrated.state.schemaVersion, 1);
+assert.equal(migrated.state.schemaVersion, 2);
 assert.equal(migrated.state.budgets.EGP['Food & drinks'], 350050, 'major-unit budget becomes minor units');
 assert.equal(migrated.state.budgets.EGP.Shopping, 400000);
 assert.equal(migrated.state.budgets.SAR.Transport, 8000);
@@ -46,7 +46,7 @@ assert.equal(migrated.state.transactions[2].incomplete, true);
 assert.equal(migrated.state.transactions[3].incomplete, true);
 assert.equal(migrated.snapshot.state.budgets.EGP.Shopping, '4000', 'snapshot keeps the pre-migration value');
 assert.equal(migrated.snapshot.folioSnapshot, 'premigration');
-assert.equal(migrated.state.schemaVersion, 1);
+assert.equal(migrated.state.schemaVersion, 2);
 assert.equal(migrated.state.experimentalPaydayRunway, false);
 assert.equal(migrated.state.paydayDate, null);
 assert.equal(migrated.state.paydayAmountMinor, null);
@@ -73,7 +73,7 @@ assert.doesNotThrow(() => FolioData.summarize(weird.state.transactions, 'USD'));
 
 const corrupt = FolioData.migrate(undefined, '{');
 assert.equal(corrupt.state.transactions.length, 0);
-assert.equal(corrupt.state.schemaVersion, 1);
+assert.equal(corrupt.state.schemaVersion, 2);
 assert.equal(corrupt.snapshot.raw, '{');
 assert.doesNotThrow(() => FolioData.summarize(corrupt.state.transactions, 'EGP'));
 
@@ -129,7 +129,7 @@ for (const key of ['currency', 'capture', 'monthlyBudgetMinor', 'monthlyIncomeMi
 }
 same(restored.sources, workspace.sources);
 same(restored.budgets, workspace.budgets);
-same(restored.transactions, workspace.transactions);
+same(restored.transactions, [Object.assign({}, workspace.transactions[0], { status: 'confirmed' })], 'schema 1 manual rows become confirmed');
 same(restored.legacyUnparsedBudgets, workspace.legacyUnparsedBudgets);
 same(restored.legacyQueue, workspace.legacyQueue);
 assert.equal(restored.folioBackup, undefined, 'envelope is not stored as user data');
@@ -312,8 +312,8 @@ const runwayState = FolioData.migrate({
   transactions: [],
   budgets: { EGP: { Shopping: 4000 } }
 }, null);
-assert.equal(runwayState.snapshot, null, 'schema stays 1 when payday fields are added');
-assert.equal(runwayState.state.schemaVersion, 1);
+assert.equal(runwayState.snapshot.fromSchema, 1, 'schema 1 is snapshotted once on the way to schema 2');
+assert.equal(runwayState.state.schemaVersion, 2);
 assert.equal(runwayState.state.experimentalPaydayRunway, true);
 assert.equal(runwayState.state.paydayAmountMinor, 1500000);
 assert.equal(runwayState.state.budgets.EGP.Shopping, 4000, 'schema 1 budgets are already minor');
@@ -338,7 +338,7 @@ const messyRunway = FolioData.migrate({
   experimentalPaydayRunway: 'yes',
   savingsReservedMinor: -5
 }, null);
-assert.equal(messyRunway.state.schemaVersion, 1);
+assert.equal(messyRunway.state.schemaVersion, 2);
 assert.equal(messyRunway.state.experimentalPaydayRunway, false);
 assert.equal(messyRunway.state.paydayAmountMinor, null);
 assert.equal(messyRunway.state.legacyPaydayAmount, 10.5);
@@ -347,5 +347,42 @@ assert.equal(messyRunway.state.upcomingBills, null);
 assert.equal(messyRunway.state.legacyUpcomingBills, 'nope');
 assert.equal(messyRunway.state.savingsReservedMinor, null);
 assert.equal(messyRunway.state.legacySavingsReserved, -5);
+
+assert.equal(migrated.state.transactions[0].status, 'confirmed', 'an existing manual row becomes confirmed');
+assert.equal(migrated.state.transactions[2].status, 'confirmed', 'an incomplete legacy row is confirmed, not dropped');
+
+const reviewBooks = FolioData.migrate({
+  schemaVersion: 1,
+  currency: 'EGP',
+  budgets: { EGP: { Shopping: 4000 } },
+  transactions: [
+    { id: 'old', source: 'manual', currency: 'EGP', direction: 'expense', amountMinor: 100, merchant: 'Cash', category: 'Other', occurredAt: 1 },
+    { id: 'alert', source: 'notification', review: true, currency: 'EGP', direction: 'expense', amountMinor: 2500, merchant: 'Talabat', category: 'Food & drinks', occurredAt: 2, sourcePackage: 'com.example.bank' },
+    { id: 'kept', source: 'notification', review: false, currency: 'EGP', direction: 'expense', amountMinor: 300, merchant: 'Metro', category: 'Transport', occurredAt: 3 },
+    { id: 'dup', source: 'notification', review: true, status: 'duplicate_candidate', currency: 'EGP', direction: 'expense', amountMinor: 2500, merchant: 'Talabat', category: 'Food & drinks', occurredAt: 4 },
+    { id: 'nope', source: 'manual', status: 'not-a-status', currency: 'EGP', direction: 'expense', amountMinor: 100, merchant: 'Kiosk', category: 'Other', occurredAt: 5 },
+    { id: 'already', source: 'notification', review: true, status: 'rejected', currency: 'EGP', direction: 'expense', amountMinor: 100, merchant: 'Spam', category: 'Other', occurredAt: 6 }
+  ]
+}, null);
+assert.equal(reviewBooks.state.schemaVersion, 2);
+assert.equal(reviewBooks.state.budgets.EGP.Shopping, 4000, 'status migration does not multiply schema 1 budgets');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'old').status, 'confirmed');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'alert').status, 'suggested');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'alert').review, true, 'the review flag stays on a suggestion');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'alert').sourcePackage, 'com.example.bank');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'kept').status, 'confirmed', 'a notification that was not flagged for review stays confirmed');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'dup').status, 'duplicate-candidate');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'nope').status, 'confirmed');
+assert.equal(reviewBooks.state.transactions.find(t => t.id === 'already').status, 'rejected', 'an explicit status is kept');
+const statusRoundTrip = FolioData.restoreBackup(JSON.stringify(FolioData.buildBackup(reviewBooks.state)));
+assert.equal(statusRoundTrip.schemaVersion, 2);
+assert.equal(statusRoundTrip.transactions.find(t => t.id === 'alert').status, 'suggested');
+assert.equal(statusRoundTrip.transactions.find(t => t.id === 'dup').status, 'duplicate-candidate');
+assert.equal(statusRoundTrip.budgets.EGP.Shopping, 4000);
+const statusAgain = FolioData.migrate(statusRoundTrip, null);
+assert.equal(statusAgain.snapshot, null, 'schema 2 does not snapshot again');
+assert.equal(statusAgain.state.transactions.find(t => t.id === 'alert').status, 'suggested');
+assert.equal(statusAgain.state.budgets.EGP.Shopping, 4000);
+assert.equal(FolioData.transactionsFromCsv(quoted)[0].status, 'confirmed', 'a user-imported CSV row is confirmed');
 
 console.log('PASS money, migration, backup and legacy CSV checks');
