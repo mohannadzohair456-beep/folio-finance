@@ -100,7 +100,7 @@ function inlined(name){
   assert.ok(i>=0&&j>i,'missing inline '+name);
   return h.slice(i+start.length,j).trim();
 }
-for (const name of ['folio-data.js','assistant.js','payday-runway.js','folio-v2.js','folio-v2.css','folio-flow.js','folio-flow.css','folio-home.js']) {
+for (const name of ['folio-data.js','assistant.js','payday-runway.js','folio-v2.js','folio-v2.css','folio-flow.js','folio-flow.css','folio-home.js','quick-entry.js']) {
   assert.equal(inlined(name), fs.readFileSync('android/app/src/main/assets/'+name,'utf8').trim(), name+' bundled into the page');
 }
 assert.equal(fs.readFileSync('android/app/src/main/res/values/strings.xml','utf8').includes('>Folio<'), true);
@@ -296,6 +296,8 @@ const homeHtml = flowHome.doc.getElementById('root').innerHTML;
 assert.ok(homeHtml.includes('Where your money goes'), 'home shows where money goes');
 assert.ok(homeHtml.includes('Carrefour'), 'dated spending stays on home');
 assert.ok(homeHtml.includes('Quick add') && homeHtml.includes('Voice entry'), 'home offers quick add and voice');
+assert.ok(homeHtml.includes('id="quick-entry-input"'), 'home has a one-line entry box');
+assert.ok(homeHtml.includes('Nothing is saved until you confirm'), 'home says a line is not saved yet');
 assert.ok(homeHtml.includes('prefer offline speech'), 'home says speech prefers offline');
 assert.ok(homeHtml.includes('recognizer may use the network'), 'home says the recognizer may use the network');
 const flowHtml = homeHtml.slice(homeHtml.indexOf('class="panel flow-panel"'), homeHtml.indexOf('v2-overview-entry'));
@@ -407,5 +409,49 @@ assert.equal(vm.runInContext('txStats(monthTx()).expense', reviewFirst.sandbox),
 vm.runInContext("nav('settings')", reviewFirst.sandbox);
 assert.ok(reviewFirst.doc.getElementById('root').innerHTML.includes('Always review notifications'));
 
+vm.runInContext(fs.readFileSync('android/app/src/main/assets/quick-entry.js','utf8'), flowHome.sandbox);
+const beforeQuick = JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.length;
+flowHome.doc.getElementById('quick-entry-input').value = 'not an amount';
+vm.runInContext('quickEntrySubmit({preventDefault(){}})', flowHome.sandbox);
+assert.equal(JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.length, beforeQuick, 'an unreadable line is not saved');
+assert.ok(flowHome.sandbox.quickEntryMessage.includes('Nothing was saved'), 'the refusal says nothing was saved');
+assert.ok(flowHome.sandbox.quickEntryMessage.includes('مفيش حاجة اتسجلت'), 'the refusal is also in Egyptian Arabic');
+assert.equal(flowHome.doc.getElementById('modal-root').innerHTML.includes('Confirm and save'), false, 'a refusal does not open confirm');
+flowHome.doc.getElementById('quick-entry-input').value = '150 lunch';
+vm.runInContext('quickEntrySubmit({preventDefault(){}})', flowHome.sandbox);
+assert.equal(JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.length, beforeQuick, 'review does not save');
+assert.ok(flowHome.doc.getElementById('modal-root').innerHTML.includes('Confirm and save'), 'review opens a confirm step');
+flowHome.doc.getElementById('quick-confirm-amount').value = '150.00';
+flowHome.doc.getElementById('quick-confirm-merchant').value = 'lunch';
+flowHome.doc.getElementById('quick-confirm-category').value = 'Food & drinks';
+vm.runInContext('quickEntryConfirmSave()', flowHome.sandbox);
+const savedQuick = JSON.parse(flowHome.data.get('folio_finance_v1')).transactions;
+assert.equal(savedQuick.length, beforeQuick + 1, 'confirm saves one row');
+const lunch = savedQuick[savedQuick.length - 1];
+assert.equal(lunch.amountMinor, 15000);
+assert.equal(lunch.direction, 'expense');
+assert.equal(lunch.category, 'Food & drinks');
+assert.equal(lunch.merchant, 'lunch');
+assert.equal(lunch.currency, 'EGP');
+assert.equal(lunch.source, 'manual');
+assert.equal(lunch.status, 'confirmed');
+assert.equal(lunch.review, false);
+assert.equal(flowHome.sandbox.FolioData.transactionStatus(lunch), 'confirmed');
+assert.equal(JSON.parse(flowHome.data.get('folio_finance_v1')).schemaVersion, 2, 'quick entry does not bump the schema');
+flowHome.doc.getElementById('quick-entry-input').value = '+5000 salary';
+vm.runInContext('quickEntrySubmit({preventDefault(){}})', flowHome.sandbox);
+assert.equal(JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.length, beforeQuick + 1, 'a second review still waits');
+flowHome.doc.getElementById('quick-confirm-amount').value = '4500';
+flowHome.doc.getElementById('quick-confirm-merchant').value = 'Payroll';
+flowHome.doc.getElementById('quick-confirm-category').value = 'Salary';
+vm.runInContext("quickEditDirection='income';quickEntryConfirmSave()", flowHome.sandbox);
+const payroll = JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.find(entry => entry.merchant === 'Payroll');
+assert.ok(payroll, 'an edited confirm saves the edited row');
+assert.equal(payroll.amountMinor, 450000);
+assert.equal(payroll.direction, 'income');
+assert.equal(payroll.category, 'Salary');
+assert.equal(payroll.status, 'confirmed');
+
 console.log('PASS bundled interface and tracking setup checks');
+require('./quick-entry.test.cjs');
 require('./boot.test.cjs');

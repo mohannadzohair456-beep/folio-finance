@@ -119,7 +119,7 @@ What still happens before first paint:
 - Read and migrate `folio_finance_v1`, including the premigration snapshot when one is required.
 - `persist()` so the migrated ledger is on disk before the overlay drops.
 - For a new install, Folio v2 draws onboarding (`Meet Folio.`) in that same turn.
-- For an onboarded home, one DOM write draws the app frame, the entered balance (no transaction walk), and four placeholder rows. The balance line is the entered figure, not the later available estimate.
+- For an onboarded home, one DOM write draws the app frame, the one-line entry box (markup only), the entered balance (no transaction walk), and four placeholder rows. The balance line is the entered figure, not the later available estimate. The quick-entry parser stays in a `text/plain` script and is compiled on the first Review tap, not in that paint.
 
 What waits until after that paint (two animation frames, so the first frame can draw):
 
@@ -128,3 +128,7 @@ What waits until after that paint (two animation frames, so the first frame can 
 - Notification refresh is unchanged: `refreshNative` at 450ms, then every 10s.
 
 `tests/boot.test.cjs` (also required from `tests/ui.test.cjs`) checks that order with a queued animation frame, and checks that a host without `requestAnimationFrame` still renders the full home in the first turn. A headless Chrome load of the page CSP showed a dynamically inserted inline script run; that check is not a launch time.
+
+## FOL-117 — one-line entry after this baseline
+
+No new TotalTime or content-probe numbers were measured for this change. The table above is still the v0.3.43 device run. The entry box is part of the shell DOM write. Its parser is not part of the scripts that run before that write.

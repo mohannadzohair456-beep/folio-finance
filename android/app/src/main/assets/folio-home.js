@@ -1,4 +1,5 @@
 var fastOpen=false,fastDirection='expense',fastAmount='',fastMerchant='',fastCategory='Other',fastUndo=null,fastUndoTimer=0;
+var quickEntryText='',quickEntryMessage='',quickDraft=null,quickEditDirection='expense',quickEditCategory='Other',quickEditAmountText='',quickEditMerchant='';
 function voiceLocaleNow(){
   if(window.FolioV2&&typeof FolioV2.currentVoiceLocale==='function')return FolioV2.currentVoiceLocale();
   return 'en-US';
@@ -59,7 +60,7 @@ function paintFastEntry(){
   }
   root.innerHTML=`<div class="fast-scrim" onclick="if(event.target===this)closeFastEntry()"><section class="fast-sheet" role="dialog" aria-modal="true" aria-labelledby="fast-title"><div class="fast-head"><div><p class="eyebrow">QUICK ADD</p><h3 id="fast-title">${dir==='income'?'Record income':'Record an expense'}</h3></div><button type="button" class="close" aria-label="Close quick add" onclick="closeFastEntry()">${icon('close',17)}</button></div><div class="fast-type" role="group" aria-label="Income or expense"><button type="button" class="${dir==='expense'?'selected out':''}" aria-pressed="${dir==='expense'?'true':'false'}" onclick="fastSetDirection('expense')">Expense</button><button type="button" class="${dir==='income'?'selected':''}" aria-pressed="${dir==='income'?'true':'false'}" onclick="fastSetDirection('income')">Income</button></div><div class="fast-amount-wrap"><span class="fast-currency">${h(state.currency)}</span><div id="fast-amount" class="fast-amount" aria-live="polite">${h(fastAmount||'0')}</div></div><div class="fast-keys" role="group" aria-label="Amount keypad">${keypad}</div><label class="fast-field" for="fast-merchant">Merchant</label><input id="fast-merchant" class="textinput" maxlength="90" autocomplete="off" value="${h(fastMerchant)}" oninput="fastSetMerchant(this.value)">${recent.length?`<p class="fast-label">Recent</p><div class="fast-chips">${chipButtons(recent,'merchant')}</div>`:''}${frequent.length?`<p class="fast-label">Frequent</p><div class="fast-chips">${chipButtons(frequent,'merchant')}</div>`:''}<p class="fast-label">Category</p><div class="fast-chips">${chipButtons(cats,'cat')}</div><button type="button" class="fast-save" onclick="commitFastEntry()">Save ${dir==='income'?'income':'expense'}</button></section></div>`;
 }
-function openFastEntry(){fastOpen=true;fastDirection='expense';fastAmount='';fastMerchant='';fastCategory='Other';paintFastEntry();}
+function openFastEntry(){quickDraft=null;fastOpen=true;fastDirection='expense';fastAmount='';fastMerchant='';fastCategory='Other';paintFastEntry();}
 function closeFastEntry(){if(!fastOpen)return;fastOpen=false;var root=document.getElementById('modal-root');if(root)root.innerHTML='';}
 function rememberFastMerchant(){var node=document.getElementById('fast-merchant');if(fastOpen&&node&&typeof node.value==='string')fastMerchant=String(node.value).slice(0,90);}
 function fastSetMerchant(value){fastMerchant=String(value==null?'':value).slice(0,90);}
@@ -112,4 +113,121 @@ function undoFastEntry(){
   if(region)region.innerHTML='';
   render();
   notify('Entry removed.');
+}
+function quickEntryApi(){
+  if(typeof FolioQuickEntry!=='undefined'&&FolioQuickEntry&&FolioQuickEntry.parseQuickEntry)return FolioQuickEntry;
+  if(window.FolioQuickEntry&&window.FolioQuickEntry.parseQuickEntry)return window.FolioQuickEntry;
+  return null;
+}
+function ensureQuickEntry(){
+  if(quickEntryApi())return true;
+  if(typeof folioRunDeferred==='function'){try{folioRunDeferred('folio-deferred-quick-entry');}catch(err){}}
+  return !!quickEntryApi();
+}
+function quickEntryRemember(value){quickEntryText=String(value==null?'':value).slice(0,240);}
+function quickEntryMessageHtml(){
+  if(!quickEntryMessage)return '';
+  var parts=String(quickEntryMessage).split('\n'),html='',i;
+  for(i=0;i<parts.length;i++)html+='<span class="quick-entry-line">'+h(parts[i])+'</span>';
+  return html;
+}
+function quickEntryMarkup(){
+  return '<section class="quick-entry" aria-label="One-line entry"><label class="quick-entry-label" for="quick-entry-input">Add in one line</label><p>Try 150 lunch, +5000 salary, or \u062f\u0641\u0639\u062a 200 \u0645\u0648\u0627\u0635\u0644\u0627\u062a. Nothing is saved until you confirm. \u0645\u0641\u064a\u0634 \u062d\u0627\u062c\u0629 \u0628\u062a\u062a\u0633\u062c\u0644 \u063a\u064a\u0631 \u0644\u0645\u0627 \u062a\u0623\u0643\u0651\u062f.</p><form class="quick-entry-row" onsubmit="return quickEntrySubmit(event)"><input id="quick-entry-input" maxlength="240" autocomplete="off" enterkeyhint="done" placeholder="150 lunch" aria-label="One-line entry" value="'+h(quickEntryText)+'" oninput="quickEntryRemember(this.value)"><button type="submit">Review</button></form><p id="quick-entry-message" class="quick-entry-message" role="status">'+quickEntryMessageHtml()+'</p></section>';
+}
+function quickEntrySubmit(event){
+  if(event&&event.preventDefault)event.preventDefault();
+  var node=document.getElementById('quick-entry-input');
+  if(node&&typeof node.value==='string')quickEntryRemember(node.value);
+  var api=ensureQuickEntry()?quickEntryApi():null;
+  if(!api){
+    quickEntryMessage='Quick entry is still loading. Try again in a moment. Nothing was saved.\n\u0644\u0633\u0647 \u0628\u064a\u062d\u0645\u0651\u0644. \u062c\u0631\u0651\u0628 \u0643\u0645\u0627\u0646 \u0644\u062d\u0638\u0629. \u0645\u0641\u064a\u0634 \u062d\u0627\u062c\u0629 \u0627\u062a\u0633\u062c\u0644\u062a.';
+    quickDraft=null;
+    render();
+    return false;
+  }
+  var parsed=api.parseQuickEntry(quickEntryText,{currency:state.currency,now:Date.now()});
+  if(!parsed.ok){
+    quickEntryMessage=parsed.messageEn+'\n'+parsed.messageAr;
+    quickDraft=null;
+    var modal=document.getElementById('modal-root');
+    if(modal)modal.innerHTML='';
+    render();
+    return false;
+  }
+  quickDraft=parsed.draft;
+  quickEntryMessage='';
+  var live=document.getElementById('quick-entry-message');
+  if(live)live.textContent='';
+  quickEditDirection=parsed.draft.direction;
+  quickEditCategory=parsed.draft.category;
+  quickEditMerchant=parsed.draft.merchant;
+  quickEditAmountText=api.formatAmountMajor(parsed.draft.amountMinor);
+  paintQuickConfirm();
+  return false;
+}
+function readQuickEdits(){
+  var amountNode=document.getElementById('quick-confirm-amount');
+  var merchantNode=document.getElementById('quick-confirm-merchant');
+  var categoryNode=document.getElementById('quick-confirm-category');
+  if(amountNode&&typeof amountNode.value==='string')quickEditAmountText=amountNode.value;
+  if(merchantNode&&typeof merchantNode.value==='string')quickEditMerchant=merchantNode.value;
+  if(categoryNode&&typeof categoryNode.value==='string'&&categoryNode.value)quickEditCategory=categoryNode.value;
+}
+function paintQuickConfirm(){
+  fastOpen=false;
+  var root=document.getElementById('modal-root');
+  var api=quickEntryApi();
+  if(!root||!quickDraft||!api)return;
+  var cats=api.categoriesFor(quickEditDirection);
+  if(cats.indexOf(quickEditCategory)<0)cats=cats.concat([quickEditCategory]);
+  var options='',i;
+  for(i=0;i<cats.length;i++)options+='<option'+(cats[i]===quickEditCategory?' selected':'')+'>'+h(cats[i])+'</option>';
+  var dir=quickEditDirection;
+  root.innerHTML='<div class="fast-scrim" onclick="if(event.target===this)quickEntryCancel()"><section class="fast-sheet" id="quick-confirm" role="dialog" aria-modal="true" aria-labelledby="quick-confirm-title"><div class="fast-head"><div><p class="eyebrow">CONFIRM</p><h3 id="quick-confirm-title">Check this entry</h3></div><button type="button" class="close" aria-label="Close confirm" onclick="quickEntryCancel()">'+icon('close',17)+'</button></div><p class="capture-hint">Today \u00b7 '+h(quickDraft.currency)+'. Nothing is saved until you confirm. \u0645\u0641\u064a\u0634 \u062d\u0627\u062c\u0629 \u0628\u062a\u062a\u0633\u062c\u0644 \u063a\u064a\u0631 \u0644\u0645\u0627 \u062a\u0623\u0643\u0651\u062f.</p><div class="fast-type" role="group" aria-label="Income or expense"><button type="button" class="'+(dir==='expense'?'selected out':'')+'" aria-pressed="'+(dir==='expense'?'true':'false')+'" onclick="quickEntrySetDirection(\'expense\')">Expense</button><button type="button" class="'+(dir==='income'?'selected':'')+'" aria-pressed="'+(dir==='income'?'true':'false')+'" onclick="quickEntrySetDirection(\'income\')">Income</button></div><label class="fast-field" for="quick-confirm-amount">Amount ('+h(quickDraft.currency)+')</label><input id="quick-confirm-amount" class="textinput" inputmode="decimal" autocomplete="off" value="'+h(quickEditAmountText)+'"><label class="fast-field" for="quick-confirm-merchant">Name</label><input id="quick-confirm-merchant" class="textinput" maxlength="90" autocomplete="off" value="'+h(quickEditMerchant)+'"><label class="fast-field" for="quick-confirm-category">Category</label><select id="quick-confirm-category" class="textinput">'+options+'</select><button type="button" class="fast-save" onclick="quickEntryConfirmSave()">Confirm and save</button><button type="button" class="secondary" style="width:100%;margin-top:8px" onclick="quickEntryCancel()">Back</button></section></div>';
+}
+function quickEntrySetDirection(dir){
+  if(dir!=='income'&&dir!=='expense')return;
+  readQuickEdits();
+  quickEditDirection=dir;
+  var api=quickEntryApi();
+  var cats=api?api.categoriesFor(dir):[];
+  if(cats.indexOf(quickEditCategory)<0)quickEditCategory=dir==='income'?'Other income':'Other';
+  paintQuickConfirm();
+}
+function quickEntryCancel(){
+  quickDraft=null;
+  var root=document.getElementById('modal-root');
+  if(root)root.innerHTML='';
+}
+function closeQuickEntry(){quickEntryCancel();}
+function quickEntryTodayNoon(){
+  var today=dateInputValue(Date.now());
+  var when=new Date(today+'T12:00:00').getTime();
+  return Number.isFinite(when)?when:Date.now();
+}
+function quickEntryConfirmSave(){
+  var api=quickEntryApi();
+  if(!quickDraft||!api){notify('Quick entry is still loading. Nothing was saved.');return;}
+  readQuickEdits();
+  var result=api.confirmQuickEntry(quickDraft,{
+    amountText:quickEditAmountText,
+    direction:quickEditDirection,
+    category:quickEditCategory,
+    merchant:quickEditMerchant,
+    occurredAt:quickEntryTodayNoon(),
+    reviewedAt:Date.now()
+  });
+  if(!result.ok){notify(result.messageEn+' '+result.messageAr);return;}
+  var row=result.transaction;
+  row.id='manual-'+Date.now()+'-'+Math.random().toString(36).slice(2,9);
+  var before=state.transactions.slice();
+  state.transactions.push(row);
+  if(!persist()){state.transactions=before;notify('Could not save. Please check your device storage.');return;}
+  quickDraft=null;
+  quickEntryText='';
+  quickEntryMessage='';
+  var root=document.getElementById('modal-root');
+  if(root)root.innerHTML='';
+  render();
+  notify('Transaction added');
 }
