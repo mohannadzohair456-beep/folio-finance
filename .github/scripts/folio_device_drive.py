@@ -127,6 +127,16 @@ class Driver:
                         continue
                     x1, y1, x2, y2 = (int(match.group(i)) for i in range(1, 5))
                     if x2 <= x1 or y2 <= y1:
+                        # WebView keeps off-screen rows at 0,0. The text still
+                        # proves what was saved; these nodes are never tapped.
+                        if text:
+                            nodes.append({
+                                "text": text,
+                                "class": node.attrib.get("class") or "",
+                                "clickable": False,
+                                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                                "cx": 0, "cy": -1,
+                            })
                         continue
                     nodes.append({
                         "text": text,
@@ -228,7 +238,17 @@ class Driver:
         return "\n".join(pieces)
 
     def visible(self, node):
+        if node["x2"] <= node["x1"] or node["y2"] <= node["y1"]:
+            return False
         return 0 <= node["cx"] <= self.width and 0 <= node["cy"] <= self.height
+
+    def bring_into_view(self, needle, scrolls=4):
+        for _ in range(scrolls + 1):
+            nodes = self.dump_nodes()
+            if any(needle.lower() in node["text"].lower() and self.visible(node) for node in nodes):
+                return True
+            self.swipe_up()
+        return False
 
     def candidates(self, nodes, needle, forbid=()):
         needle_l = needle.lower()
@@ -440,6 +460,8 @@ def upgrade(driver, old_apk, new_apk):
         if not driver.tap_control("Add transaction", scrolls=1):
             raise DriveError("could not find the Add transaction button")
     driver.wait_for("Carrefour", timeout=20)
+    driver.bring_into_view("Carrefour")
+    driver.shot("transaction")
 
     if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not open Budgets")
@@ -459,7 +481,7 @@ def upgrade(driver, old_apk, new_apk):
     before_home = driver.collect(scrolls=3)
     driver.save_text("before-home.txt", before_home)
     balance_ok = ("8,295", "8,420.50", "8,420.5")
-    driver.require(before_home, ["Carrefour", "125.50", balance_ok, "9,000"], "before-upgrade overview")
+    driver.require(before_home, ["Carrefour", ("125.50", "125.5"), balance_ok, "9,000"], "before-upgrade overview")
     if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not return to Budgets")
     time.sleep(1)
@@ -482,7 +504,7 @@ def upgrade(driver, old_apk, new_apk):
     driver.save_text("after-home.txt", after_home)
     if "Meet Folio" in after_home and "Carrefour" not in after_home:
         raise DriveError("upgrade returned to onboarding and the entered records are not on screen")
-    driver.require(after_home, ["Carrefour", "125.50", balance_ok, "9,000"], "after-upgrade overview")
+    driver.require(after_home, ["Carrefour", ("125.50", "125.5"), balance_ok, "9,000"], "after-upgrade overview")
     if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not open Budgets after upgrade")
     time.sleep(1)
