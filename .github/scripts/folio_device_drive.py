@@ -28,6 +28,24 @@ def is_control_label(text, needle):
     return normalized_label(text) == normalized_label(needle)
 
 
+# The row renders the Unicode minus used by the app: −EGP 125.50.
+# Cash-flow text can also expose the same expense as EGP−125.5.
+EXPENSE_125 = (
+    "−EGP 125.50", "−EGP 125.5",
+    "-EGP 125.50", "-EGP 125.5",
+    "EGP−125.50", "EGP−125.5",
+    "EGP-125.50", "EGP-125.5",
+)
+BALANCE_AFTER_ENTRY = ("8,295", "8,420.50", "8,420.5")
+
+
+def assert_entered(driver, home, budget, where):
+    """Every value typed on v0.2.33 must still be on screen."""
+    driver.require(home, ["Carrefour", EXPENSE_125, BALANCE_AFTER_ENTRY, "9,000"], where + " overview")
+    driver.require(budget, ["Food", ("3,500", "3,500.00"), "9,000"], where + " budgets")
+    driver.forbid(budget, ["350,000"], where + " budgets")
+
+
 class DriveError(Exception):
     pass
 
@@ -312,13 +330,21 @@ class Driver:
         return False
 
     def hide_keyboard(self):
+        # MainActivity treats Back as "go to the overview", so Back must not
+        # be used to dismiss the keyboard.
         result = self.shell("dumpsys input_method", check=False, timeout=25)
-        text = result.stdout or ""
-        if "mInputShown=true" not in text:
+        if "mInputShown=true" not in (result.stdout or ""):
             return
-        print("hiding keyboard", flush=True)
-        self.shell("input keyevent KEYCODE_BACK", check=False)
-        time.sleep(0.5)
+        ime = self.shell("settings get secure default_input_method", check=False)
+        ident = (ime.stdout or "").strip()
+        if not ident or ident == "null" or any(ch.isspace() for ch in ident):
+            print("keyboard visible, leaving it up", ident, flush=True)
+            return
+        print("hiding keyboard", ident, flush=True)
+        self.shell("ime disable " + ident, check=False)
+        time.sleep(0.3)
+        self.shell("ime enable " + ident, check=False)
+        time.sleep(0.2)
 
     def wait_for(self, needle, timeout=45, forbid=()):
         deadline = time.time() + timeout
@@ -481,6 +507,8 @@ def upgrade(driver, old_apk, new_apk):
     driver.hide_keyboard()
     if not driver.tap_control("Save budget", scrolls=2):
         raise DriveError("could not save the budget")
+    if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
+        raise DriveError("could not show the saved category budget")
     driver.wait_for("Food", timeout=20)
 
     before_home = ""
@@ -488,15 +516,12 @@ def upgrade(driver, old_apk, new_apk):
         time.sleep(1)
     before_home = driver.collect(scrolls=3)
     driver.save_text("before-home.txt", before_home)
-    balance_ok = ("8,295", "8,420.50", "8,420.5")
-    driver.require(before_home, ["Carrefour", ("125.50", "125.5"), balance_ok, "9,000"], "before-upgrade overview")
     if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not return to Budgets")
     time.sleep(1)
     before_budget = driver.collect(scrolls=2)
     driver.save_text("before-budget.txt", before_budget)
-    driver.require(before_budget, ["Food", "3,500", "9,000"], "before-upgrade budgets")
-    driver.forbid(before_budget, ["350,000"], "before-upgrade budgets")
+    assert_entered(driver, before_home, before_budget, "before-upgrade")
     driver.shot("before-upgrade")
 
     driver.install(new_apk, replace=True)
@@ -512,14 +537,12 @@ def upgrade(driver, old_apk, new_apk):
     driver.save_text("after-home.txt", after_home)
     if "Meet Folio" in after_home and "Carrefour" not in after_home:
         raise DriveError("upgrade returned to onboarding and the entered records are not on screen")
-    driver.require(after_home, ["Carrefour", ("125.50", "125.5"), balance_ok, "9,000"], "after-upgrade overview")
     if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not open Budgets after upgrade")
     time.sleep(1)
     after_budget = driver.collect(scrolls=2)
     driver.save_text("after-budget.txt", after_budget)
-    driver.require(after_budget, ["Food", "3,500", "9,000"], "after-upgrade budgets")
-    driver.forbid(after_budget, ["350,000"], "after-upgrade budgets")
+    assert_entered(driver, after_home, after_budget, "after-upgrade")
     driver.shot("after-upgrade")
     print("UPGRADE_DATA_SURVIVED", new_name, new_code, flush=True)
 
