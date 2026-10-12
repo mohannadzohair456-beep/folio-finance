@@ -24,6 +24,8 @@ vm.runInContext('nav("overview")',context);
 assert.ok(doc.getElementById('root').innerHTML.includes('Monthly spending target'),'Overall budget reflected on home');
 assert.ok(doc.getElementById('root').innerHTML.includes('Where your money goes'),'Home shows the money flow after onboarding');
 assert.ok(doc.getElementById('root').innerHTML.includes('No EGP movement this month'),'An empty month explains that the flow has nothing to draw');
+assert.ok(doc.getElementById('root').innerHTML.includes('Entered balance is current'),'a balance entered during onboarding is current');
+assert.ok(doc.getElementById('root').innerHTML.includes('Not a bank balance'),'the entered figure is not labeled a bank balance');
 vm.runInContext('nav("budgets")',context);
 assert.ok(doc.getElementById('root').innerHTML.includes('Overall spending target'),'Overall budget reflected on Budgets');
 vm.runInContext('nav("assistant")',context);
