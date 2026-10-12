@@ -115,7 +115,7 @@ Local commands that passed before the pull request, on this branch, Linux, Node 
 | `node tests/payday-runway.test.cjs` | PASS 76 checks |
 | `node tests/upgrade-boot.test.cjs` | PASS |
 
-Pull-request CI has not run for this commit yet. No tag has been published for it. The device-upgrade gate has not printed `UPGRADE_DATA_SURVIVED` for this change. It was not installed on a physical phone. SpeechRecognizer, the runtime permission dialog, the offline pack message on that phone, and the system speech screen were not exercised on hardware. `MainActivity` was not compiled here because this workspace has no Android SDK.
+Pull request: https://github.com/mohannadzohair456-beep/folio-finance/pull/31. CI on that pull request has not finished. No tag has been published for it. The device-upgrade gate has not printed `UPGRADE_DATA_SURVIVED` for this change. It was not installed on a physical phone. SpeechRecognizer, the runtime permission dialog, the offline pack message on that phone, and the system speech screen were not exercised on hardware. `MainActivity` was not compiled here because this workspace has no Android SDK.
 
 ## Not done
 
