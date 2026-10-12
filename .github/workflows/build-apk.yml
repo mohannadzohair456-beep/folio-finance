@@ -48,6 +48,10 @@ jobs:
             tests/ParserTest.java tests/DedupTest.java
           java -cp /tmp/folio-parser-tests ParserTest
           java -cp /tmp/folio-parser-tests DedupTest
+      - name: Parse bundled assets as ES2018
+        run: node tests/chrome69-syntax.cjs
+      - name: Test money flow, quick add, and voice drafts
+        run: node tests/flow.test.cjs
       - name: Test interface
         run: node tests/ui.test.cjs
       - name: Test onboarding and Folio assistant

@@ -170,9 +170,19 @@ public final class MainActivity extends Activity {
         if (resultCode == RESULT_OK && data != null) {
             ArrayList<String> results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
             if (results != null && !results.isEmpty()) transcript = results.get(0);
-        } else if (resultCode != RESULT_CANCELED) error = "Speech was not recognized. Please type your request.";
+        } else if (resultCode != RESULT_CANCELED) error = "Speech was not recognized. Please type your request. Nothing was saved.";
+        deliverVoice(transcript, error);
+    }
+    /** The system recognizer activity owns the microphone. Folio does not request RECORD_AUDIO. */
+    private boolean recognizerInstalled() {
+        Intent probe = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        return probe.resolveActivity(getPackageManager()) != null;
+    }
+    private void deliverVoice(String transcript, String error) {
+        if (web == null) return;
         final String payload = "window.FolioV2&&window.FolioV2.onVoiceResult(" +
-            JSONObject.quote(transcript) + "," + JSONObject.quote(error) + ")";
+            JSONObject.quote(transcript == null ? "" : transcript) + "," +
+            JSONObject.quote(error == null ? "" : error) + ")";
         web.post(() -> web.evaluateJavascript(payload, null));
     }
     @Override public void onBackPressed() {
@@ -197,17 +207,25 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public void pickBackupFile() { runOnUiThread(() -> openImportPicker(JSON_IMPORT_REQUEST)); }
         @JavascriptInterface public void startVoiceRecognition(String locale) {
             runOnUiThread(() -> {
+                if (!recognizerInstalled()) {
+                    deliverVoice("", "Speech recognition is unavailable on this device. You can type instead. Nothing was saved.");
+                    return;
+                }
                 try {
+                    String language = "ar-EG".equals(locale) ? "ar-EG" : "en-US";
                     Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-EG".equals(locale) ? "ar-EG" : "en-US");
-                    intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Folio about your money");
+                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language);
+                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language);
+                    intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak a transaction. Folio prefers on-device recognition.");
+                    // A preference, not a guarantee. The sheet tells the user the recognizer may use the network.
                     intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
                     intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
                     startActivityForResult(intent, VOICE_REQUEST);
                 } catch (ActivityNotFoundException e) {
-                    if (web != null) web.evaluateJavascript(
-                        "window.FolioV2&&window.FolioV2.onVoiceResult('','Speech recognition is unavailable on this device.')", null);
+                    deliverVoice("", "Speech recognition is unavailable on this device. You can type instead. Nothing was saved.");
+                } catch (RuntimeException e) {
+                    deliverVoice("", "Speech recognition could not start. You can type instead. Nothing was saved.");
                 }
             });
         }
