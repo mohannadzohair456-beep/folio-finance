@@ -329,3 +329,4 @@ vm.runInContext('undoFastEntry()', flowHome.sandbox);
 assert.equal(JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.some(entry => entry.merchant === 'Kiosk'), false, 'undo removes the quick add');
 
 console.log('PASS bundled interface and tracking setup checks');
+require('./boot.test.cjs');

@@ -1,8 +1,10 @@
 # Handoff — 12 Oct 2026
 
-`main` is at the v0.3.40 release commit `67492f9459bc0fe1ada03f7a533a1a1370471957`, plus any docs-only commits after it. The signed APK is the GitHub release [Folio v0.3.40](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.40). Pull requests [#1](https://github.com/mohannadzohair456-beep/folio-finance/pull/1), [#2](https://github.com/mohannadzohair456-beep/folio-finance/pull/2), and [#3](https://github.com/mohannadzohair456-beep/folio-finance/pull/3) are merged. There are no open GitHub issues.
+Current `main` is `c12519f83f20943d4d5c79b3873ff6a01b3cc548`. `releases/latest` is [v0.3.71](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.71) (`app-release.apk`, 173376 bytes, sha256 `7d1f51a3be87f40bd069db2d907608be4ba93d61bf440e7d4cbc40e8c7ab3258`, versionCode 171). Gate [38276697704](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38276697704) printed `UPGRADE_DATA_SURVIVED 0.3.71 171` on schema-1 and on v0.2.33 API 34 and API 35, then `promote-release` printed `v0.3.71 prerelease=false releases/latest=v0.3.71`. Package id remains `com.folio.finance.app`. The sections below are the v0.3.40 snapshot and are not the current install.
 
-## What is safe to install
+`main` was at the v0.3.40 release commit `67492f9459bc0fe1ada03f7a533a1a1370471957`, plus any docs-only commits after it. The signed APK at that point was the GitHub release [Folio v0.3.40](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.40). Pull requests [#1](https://github.com/mohannadzohair456-beep/folio-finance/pull/1), [#2](https://github.com/mohannadzohair456-beep/folio-finance/pull/2), and [#3](https://github.com/mohannadzohair456-beep/folio-finance/pull/3) are merged. There are no open GitHub issues.
+
+## What was safe to install at v0.3.40
 
 | | |
 | --- | --- |
@@ -59,7 +61,7 @@ Signed main CI 38213235746 succeeded. Pull-request CI [38213145471](https://gith
 
 ## Not executed
 
-Install v0.2.33, add transactions, a budget, and a balance, upgrade in place to v0.3.40, and confirm the data is still there. This machine has `/dev/kvm` and no `adb`, emulator, or Android SDK. The release keystore is not here and must not be created here.
+Install v0.2.33, add transactions, a budget, and a balance, upgrade in place to v0.3.40, and confirm the data is still there. That check was not run for v0.3.40 on this machine. Later emulator gates did run it; the current one is [run 38276697704](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38276697704) for v0.3.71. This machine has `/dev/kvm` and no `adb`, emulator, or Android SDK. The release keystore is not here and must not be created here.
 
 GitHub run [38213352659](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38213352659) did install v0.3.40 (versionCode 140) on an Android 10 emulator beside the old debug package `com.folio.finance` versionCode 26. Both packages were present and `com.folio.finance.app` had a running process. That is a coexistence install of two application ids. It is not the upgrade test above.
 
@@ -68,7 +70,7 @@ Headless Chrome was used on the bundled page before `assistant.js` was inlined. 
 ## Open issues
 
 - `README.md` still says CSV restore is unimplemented and that release signing is not working. Both sentences are stale. Current recovery steps are in `SIGNING-AND-RECOVERY.md` and [data-migration.md](../release/data-migration.md).
-- No device has been shown upgrading v0.2.33 in place and keeping its books. The migration tests cover the stored JSON shape, including malformed v0.2.33 rows and the old CSV export.
+- This v0.3.40 snapshot had not shown a device upgrading v0.2.33 in place and keeping its books. Later CI gates did, including v0.3.71 on [run 38276697704](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38276697704). The migration tests cover the stored JSON shape, including malformed v0.2.33 rows and the old CSV export.
 - Plain `apksigner verify` reports v1 false because minSdk is 26. The JAR signature is present and verifies at `--min-sdk-version 23`. AGP will not emit that signature itself at this minSdk.
 - The v1 verifier warns that two `META-INF` metadata files are not covered by the JAR signature.
 - `setup-java` v4 and the Node 20 action runtime print deprecation annotations. They did not fail the jobs.

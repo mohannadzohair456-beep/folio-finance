@@ -104,3 +104,27 @@ Content upper bound, when the poll saw `Meet Folio`. API 34 has no content time:
 | 35 | `ubuntu24` `20261004.327.1` (runner `GitHub Actions 1000000214`) | `INTEL(R) XEON(R) PLATINUM 8573C`, 4 vCPU | 16372440 kB | `google/sdk_gphone64_x86_64/emu64xa:15/AE3A.240806.043/12960925:userdebug/dev-keys` | `com.google.android.webview` 124.0.6367.219 |
 
 Animation scales recorded on the device were 0, 0, and 0. Screen size was 1080x1920. `github_run_attempt` was 1.
+
+## FOL-116 — what changed after this baseline
+
+No new TotalTime or content-probe numbers were measured for this change. The table above is still the v0.3.43 device run. CI does not install a pull-request build in `cold-launch-latency`.
+
+The bundled page used to do all of this before the first WebView paint, and before `onPageFinished` removed the native `folio.` overlay:
+
+- Parse and run payday runway and Ask Folio (`assistant.js`) as parser-blocking scripts.
+- Build the full overview (money-flow chart, cash-flow chart, donut, and recent rows) and then replace it when Folio v2 rendered.
+
+What still happens before first paint:
+
+- Read and migrate `folio_finance_v1`, including the premigration snapshot when one is required.
+- `persist()` so the migrated ledger is on disk before the overlay drops.
+- For a new install, Folio v2 draws onboarding (`Meet Folio.`) in that same turn.
+- For an onboarded home, one DOM write draws the app frame, the entered balance (no transaction walk), and four placeholder rows. The balance line is the entered figure, not the later available estimate.
+
+What waits until after that paint (two animation frames, so the first frame can draw):
+
+- The full home: charts, money flow, and transaction rows, in one `innerHTML` write.
+- Parsing and running payday runway, then Ask Folio. Sending a message or receiving a voice result runs those engines first if the frame has not landed yet. The built-in planner remains the fallback if the engine script does not run.
+- Notification refresh is unchanged: `refreshNative` at 450ms, then every 10s.
+
+`tests/boot.test.cjs` (also required from `tests/ui.test.cjs`) checks that order with a queued animation frame, and checks that a host without `requestAnimationFrame` still renders the full home in the first turn. A headless Chrome load of the page CSP showed a dynamically inserted inline script run; that check is not a launch time.
