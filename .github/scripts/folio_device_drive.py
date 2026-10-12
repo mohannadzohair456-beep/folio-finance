@@ -238,9 +238,17 @@ class Driver:
         return "\n".join(pieces)
 
     def visible(self, node):
-        if node["x2"] <= node["x1"] or node["y2"] <= node["y1"]:
+        if node["x2"] - node["x1"] < 24 or node["y2"] - node["y1"] < 24:
             return False
         return 0 <= node["cx"] <= self.width and 0 <= node["cy"] <= self.height
+
+    def control_ready(self, node, needle):
+        """A content button under the mobile nav is only a sliver; scroll it up."""
+        if not self.visible(node):
+            return False
+        if normalized_label(needle) in {"home", "activity", "insights", "budgets", "settings", "overview", "budget"}:
+            return True
+        return node["cy"] < self.height - 260
 
     def bring_into_view(self, needle, scrolls=4):
         for _ in range(scrolls + 1):
@@ -287,7 +295,7 @@ class Driver:
             nodes = self.look(needle)
             found = [
                 node for node in nodes
-                if self.visible(node) and is_control_label(node["text"], needle)
+                if self.control_ready(node, needle) and is_control_label(node["text"], needle)
             ]
             if found:
                 found.sort(key=lambda node: (
