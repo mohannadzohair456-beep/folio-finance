@@ -137,9 +137,13 @@
     view.timeZone=sign+String(Math.floor(abs/60)).padStart(2,'0')+':'+String(abs%60).padStart(2,'0');
     return view;
   }
+  function ensureDeferredEngines(){
+    if(typeof folioRunDeferredEngines==='function') folioRunDeferredEngines();
+  }
   function submitText(){
     const el=$('folio-assistant-input');if(!el)return;
     const t=el.value.trim();if(!t)return;
+    ensureDeferredEngines();
     message(t,'user');
     const result=window.FolioAssistant?FolioAssistant.planCommand(t,assistantLedger()):planCommand(t);
     message(result.answer);
@@ -199,6 +203,7 @@
     }
   }
   function onVoiceResult(text,error){
+    ensureDeferredEngines();
     if(error){
       message(error);
       if(typeof notify==='function')notify(error);
@@ -314,5 +319,10 @@
   if(!Number.isFinite(state.balanceReportedAt))state.balanceReportedAt=null;
   window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,enteredBalanceNote,financeSummary,voiceNetworkNotice};
   window.folioGoHome=()=>{if(!state.v2Onboarded){previousStep();return;}onNav('overview');};
-  render();
+  if(state.v2Onboarded && page==='overview' && typeof requestAnimationFrame==='function' && typeof folioAfterPaint==='function'){
+    if(!window.folioBootPainted && typeof paintLedgerShell==='function') paintLedgerShell();
+    folioAfterPaint(function(){ render(); });
+  } else {
+    render();
+  }
 })();
