@@ -2244,10 +2244,43 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
   };
   var CURRENCY_TOKEN = {
     egp: 'EGP', le: 'EGP', pound: 'EGP', pounds: 'EGP',
+    geneh: 'EGP', gineh: 'EGP', gneh: 'EGP', genh: 'EGP',
     'جنيه': 'EGP', 'جنيهات': 'EGP', 'جنيها': 'EGP',
     usd: 'USD', dollar: 'USD', dollars: 'USD', bucks: 'USD',
     'دولار': 'USD', 'دولارات': 'USD',
     sar: 'SAR', riyal: 'SAR', riyals: 'SAR', 'ريال': 'SAR', 'ريالات': 'SAR'
+  };
+  var ARABIZI_WORD = {
+    a2dar: 'اقدر', a2dr: 'اقدر', '2dar': 'اقدر',
+    ashtary: 'اشتري', ashtari: 'اشتري', ashtar: 'اشتري', eshtary: 'اشتري',
+    asrof: 'اصرف', asruf: 'اصرف', asrofo: 'اصرفه',
+    momken: 'ممكن', yenfa3: 'ينفع', yenfaa: 'ينفع',
+    '3ayez': 'عايز', '3ayza': 'عايزه', '3aiz': 'عايز', '3awz': 'عاوز',
+    law: 'لو', rasid: 'رصيد', raseed: 'رصيد', rasidy: 'رصيدي', elrasid: 'الرصيد',
+    mortab: 'مرتب', elmortab: 'المرتب', ratib: 'راتب', ratby: 'راتبي',
+    sarafet: 'صرفت', sareft: 'صرفت', sarft: 'صرفت',
+    eshteret: 'اشتريت', eshtaret: 'اشتريت',
+    daf3et: 'دفعت', dafa3t: 'دفعت',
+    floos: 'فلوس', feloos: 'فلوس', felous: 'فلوس',
+    ma3aya: 'معايا', shahr: 'شهر', elshahr: 'الشهر',
+    akher: 'اخر', a5er: 'اخر', akhr: 'اخر', nehayet: 'نهايه', nehaia: 'نهايه',
+    mezanya: 'ميزانيه', meezanya: 'ميزانيه', mizaniya: 'ميزانيه',
+    '7esab': 'حساب', '7esaby': 'حسابي', el7esab: 'الحساب', '7aga': 'حاجه',
+    kam: 'كام', eih: 'ايه', eh: 'ايه', el: 'ال', fel: 'في', fi: 'في', bank: 'البنك',
+    gam3eya: 'جمعيه', gam3ya: 'جمعيه', gameya: 'جمعيه',
+    estalamt: 'استلمت', estalamet: 'استلمت', ba2bad: 'بقبض', b2bad: 'بقبض',
+    awfar: 'اوفر', edkhar: 'ادخار', tawfeer: 'توفير',
+    masroof: 'مصروف', masrofat: 'مصروفات',
+    hel: 'هل', yekfi: 'يكفي', yekfy: 'يكفي',
+    wad3y: 'وضعي', wad3: 'وضع', molakhas: 'ملخص',
+    alf: 'الف', alaf: 'الاف', alaaf: 'الاف'
+  };
+  var ARABIZI_HINT = {
+    momken: 1, ashtari: 1, ashtary: 1, asrof: 1, asruf: 1, rasid: 1, raseed: 1,
+    mortab: 1, elmortab: 1, sarafet: 1, sareft: 1, sarft: 1, eshteret: 1, eshtaret: 1,
+    daf3et: 1, floos: 1, feloos: 1, felous: 1, ma3aya: 1, a2dar: 1, a2dr: 1,
+    '3ayez': 1, '3ayza': 1, '3aiz': 1, yenfa3: 1, a5er: 1, '7esab': 1, '7aga': 1,
+    gam3eya: 1, gameya: 1, ba2bad: 1
   };
   var FILLERS = {
     um: 1, uh: 1, er: 1, ah: 1, hmm: 1, hm: 1, like: 1, please: 1, kindly: 1,
@@ -2345,6 +2378,25 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
   }
 
+  function looksArabizi(tokens) {
+    var i;
+    for (i = 0; i < tokens.length; i++) {
+      var tok = tokens[i];
+      if (ARABIZI_HINT[tok]) return true;
+      if (/^\d/.test(tok)) continue;
+      if (/[a-z][2356789][a-z0-9']|[2356789][a-z]{2}/.test(tok)) return true;
+    }
+    return false;
+  }
+
+  function questionLanguage(input) {
+    var text = String(input || '').toLowerCase();
+    if (/[\u0600-\u06FF]/.test(text)) return 'ar';
+    if (/\b(momken|ashtari|ashtary|asrof|asruf|rasid|raseed|mortab|elmortab|sarafet|sareft|sarft|eshteret|eshtaret|daf3et|floos|feloos|felous|ma3aya|a2dar|a2dr|3ayez|3ayza|3aiz|yenfa3|a5er|7esab|7aga|gam3eya|gameya|ba2bad)\b/.test(text)) return 'ar';
+    if (/[a-z][2356789][a-z]|[2356789][a-z]{2}/.test(text)) return 'ar';
+    return 'en';
+  }
+
   function clean(input) {
     var warnings = [];
     var noisy = false;
@@ -2398,13 +2450,18 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       if (collapsed.length && collapsed[collapsed.length - 1] === tokens[i]) { noisy = true; continue; }
       collapsed.push(tokens[i]);
     }
+    var sourceTokens = collapsed;
+    if (looksArabizi(collapsed)) {
+      sourceTokens = [];
+      for (i = 0; i < collapsed.length; i++) sourceTokens.push(ARABIZI_WORD[collapsed[i]] || collapsed[i]);
+    }
     var joined = [];
-    for (i = 0; i < collapsed.length; i++) {
-      if (collapsed[i] === 'ال' && i + 1 < collapsed.length && isArChar(collapsed[i + 1].charAt(0))) {
+    for (i = 0; i < sourceTokens.length; i++) {
+      if (sourceTokens[i] === 'ال' && i + 1 < sourceTokens.length && isArChar(sourceTokens[i + 1].charAt(0))) {
         noisy = true;
-        joined.push('ال' + collapsed[i + 1]);
+        joined.push('ال' + sourceTokens[i + 1]);
         i++;
-      } else joined.push(collapsed[i]);
+      } else joined.push(sourceTokens[i]);
     }
     return { tokens: joined, noisy: noisy, warnings: warnings };
   }
@@ -2610,14 +2667,14 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
 
   function isAfford(text, count) {
     if (/\b(can i afford|could i afford|can i buy|could i buy|should i buy|should i spend)\b/.test(text)) return true;
-    if (hasAr(text, 'اقدر اشتري') || hasAr(text, 'ينفع اشتري') || hasAr(text, 'اقدر على') || hasAr(text, 'هل يكفي') || hasAr(text, 'لو اشتريت')) return true;
+    if (hasAr(text, 'اقدر اشتري') || hasAr(text, 'ينفع اشتري') || hasAr(text, 'ممكن اشتري') || hasAr(text, 'عايز اشتري') || hasAr(text, 'اقدر على') || hasAr(text, 'هل يكفي') || hasAr(text, 'لو اشتريت')) return true;
     if (/\b(can|could) i spend\b/.test(text) && count >= 1 && !/\bhow much\b/.test(text)) return true;
     return false;
   }
 
   function isSafe(text, count) {
     if (/\b(safe to spend|safely spend|how much (?:can|could) i spend|what can i spend|how much (?:is |do i have )?left|budget left|left to spend|money left)\b/.test(text)) return true;
-    if (hasAr(text, 'اقدر اصرف') || hasAr(text, 'المتاح للصرف') || hasAr(text, 'الامن للصرف')) return true;
+    if (hasAr(text, 'اقدر اصرف') || hasAr(text, 'المتاح للصرف') || hasAr(text, 'الامن للصرف') || hasAr(text, 'كام اصرف')) return true;
     if (/\b(can|could) i spend\b/.test(text) && count === 0) return true;
     return false;
   }
@@ -3178,8 +3235,32 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return details;
   }
 
-  function explainCommon(report, assumed) {
+  function spokenAmount(minor, currency, lang) {
+    if (lang !== 'ar') return formatMoney(minor, currency);
+    var neg = minor < 0;
+    var abs = Math.abs(minor);
+    var whole = Math.floor(abs / 100);
+    var frac = String(abs % 100);
+    if (frac.length < 2) frac = '0' + frac;
+    var grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    var unit = currency === 'EGP' ? 'جنيه' : currency;
+    var body = grouped + '.' + frac + ' ' + unit;
+    if (neg) return '\u200E-' + body;
+    return body;
+  }
+
+  function explainCommon(report, assumed, lang) {
     var bits = [];
+    if (lang === 'ar') {
+      if (report.planned != null) {
+        bits.push('الدخل المخطط ' + spokenAmount(report.planned, report.currency, 'ar') + ' مش فلوس متاحة دلوقتي ومتحسبش.');
+      } else {
+        bits.push('مفيش دخل مخطط اتضاف للنقد.');
+      }
+      if (report.foreign) bits.push('استبعدنا ' + report.foreign + ' حركة بعملة تانية. مفيش تحويل.');
+      if (assumed.length) bits.push('افتراضات للنواقص: ' + assumed.join(', ') + '.');
+      return bits.join(' ');
+    }
     if (report.planned != null) {
       bits.push('Planned income of ' + formatMoney(report.planned, report.currency) + ' is not received cash and was not included.');
     } else {
@@ -3190,6 +3271,13 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
     if (assumed.length) bits.push('Assumed defaults for missing inputs: ' + assumed.join(', ') + '.');
     return bits.join(' ');
+  }
+
+  function hasExcludedReason(list, reason) {
+    var i;
+    if (!list) return false;
+    for (i = 0; i < list.length; i++) if (list[i] && list[i].reason === reason) return true;
+    return false;
   }
 
   function safeAssumptions(report, categoryMissing) {
@@ -3280,28 +3368,78 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return { input: input, extraMissing: uniqSort(extraMissing), extraExcluded: extraExcluded, track: track };
   }
 
-  function runwayExplanation(result, cost) {
+  function runwayExplanation(result, cost, lang) {
+    var ar = lang === 'ar';
+    var missing = result && result.missing ? result.missing : [];
     var known = result && (result.status === 'ok' || result.status === 'shortfall');
+    var date = result && result.payday && result.payday.date ? result.payday.date : '';
     if (!known) {
-      var missing = result && result.missing && result.missing.length ? result.missing.join(', ') : 'unknown';
-      var blocked = 'Status: insufficient data. No safe-to-spend number was calculated. Missing or stale inputs: ' + missing + '.';
-      if (cost) blocked += ' The ' + formatMoney(cost.amount, cost.currency) + ' purchase was not judged.';
-      return blocked;
+      var sentence;
+      if (missing.indexOf('stale_snapshot') >= 0) {
+        sentence = ar
+          ? 'مش هقدر أحسب تقدير يعتمد عليه دلوقتي. أكّد رصيدك الحالي الأول.'
+          : "I can't calculate a reliable estimate. Confirm an up-to-date balance first.";
+      } else if (missing.indexOf('payday_passed') >= 0) {
+        sentence = ar
+          ? 'ميعاد المرتب أو الدخل اللي متسجل عدى. حدد ميعاد الدخل المتوقع الجاي؛ الدخل المتوقع مش محسوب قبل ما يوصل.'
+          : "That payday has passed. Enter the next expected income date; future pay isn't counted yet.";
+      } else if (missing.indexOf('unconfirmed_commitment') >= 0) {
+        sentence = ar
+          ? 'راجع الفواتير والأقساط اللي جاية حتى لو ما عندكش التزامات، وبعدها جرّب تاني.'
+          : 'Please review all upcoming bills/installments even if you have none, then retry.';
+      } else {
+        var need = missing.length ? missing.join(', ') : 'unknown';
+        sentence = ar
+          ? 'البيانات مش كفاية: محتاج ' + need + '. مش هخمّن لك مبلغ تقدر تصرفه.'
+          : 'insufficient data: I still need ' + need + ". I won't guess a spendable amount.";
+      }
+      if (!ar && sentence.toLowerCase().indexOf('insufficient data') < 0) sentence = 'insufficient data. ' + sentence;
+      if (cost) {
+        sentence += ar
+          ? ' شراء بـ ' + spokenAmount(cost.amount, cost.currency, 'ar') + ' متتقيمش.'
+          : ' The ' + formatMoney(cost.amount, cost.currency) + ' purchase was not judged.';
+      }
+      return sentence;
     }
-    var total = formatMoney(result.safe_to_spend_minor, result.currency);
-    var perDay = formatMoney(result.per_day_minor, result.currency);
-    var text = 'Available now until payday is ' + total + ', which is ' + perDay + ' per day across ' + result.days + (result.days === 1 ? ' day.' : ' days.');
-    if (result.status === 'shortfall') text += ' The runway is short by ' + formatMoney(-result.safe_to_spend_minor, result.currency) + '.';
-    text += ' Projected payday income was not added to available now.';
+    var totalMinor = result.safe_to_spend_minor;
+    var text;
+    if (totalMinor === 0) {
+      text = ar
+        ? 'المتاح تقديريًا هو صفر جنيه. ده مش معناه إن كل التزاماتك مضمونة.'
+        : 'The provisional discretionary amount is 0 EGP. That does not guarantee your bills are covered.';
+    } else if (totalMinor < 0) {
+      text = ar
+        ? 'اللي متسجل عندنا بيشير إلى عجز تقديري ' + spokenAmount(-totalMinor, result.currency, 'ar') + (date ? ' قبل ' + date : '') + '. راجع رصيدك الفعلي والالتزامات اللي لسه عليك.'
+        : 'Your inputs show an estimated shortfall of ' + formatMoney(-totalMinor, result.currency) + (date ? ' before ' + date : '') + '. Check actual balances and outstanding payments.';
+    } else {
+      text = ar
+        ? 'المتاح تقديريًا للمصاريف الاختيارية' + (date ? ' لحد ' + date : '') + ' هو ' + spokenAmount(totalMinor, result.currency, 'ar') + ' (حوالي ' + spokenAmount(result.per_day_minor, result.currency, 'ar') + ' في اليوم)، على حسب الرصيد والالتزامات اللي إنت أكّدتها. ده تقدير مش ضمان؛ أي مصاريف أو التزامات ناقصة ممكن تغيّره.'
+        : 'Your estimated discretionary amount' + (date ? ' until ' + date : '') + ' is ' + formatMoney(totalMinor, result.currency) + ' (about ' + formatMoney(result.per_day_minor, result.currency) + ' per day), based on balances and bills you confirmed. It\'s not a guarantee; missing spending or dues could change it.';
+    }
+    text += ar
+      ? ' الدخل المتوقع مش محسوب في المتاح دلوقتي.'
+      : ' Projected payday income was not added to available now.';
     if (result.unconfirmed_transactions && result.unconfirmed_transactions.length) {
       var pendingCount = typeof result.unconfirmed_count === 'number' ? result.unconfirmed_count : result.unconfirmed_transactions.length;
-      text += ' Unconfirmed notification transactions (' + pendingCount + ') are excluded from that number.';
-      if (typeof result.unconfirmed_net_minor === 'number') text += ' Shown separately, their net is ' + formatMoney(result.unconfirmed_net_minor, result.currency) + '.';
+      text += ar
+        ? ' فيه ' + pendingCount + ' عملية محتاجة مراجعة؛ الإشعارات اللي مش مؤكدة مش بنعتبرها دخل أو مصروف نهائي.'
+        : ' Unconfirmed notification transactions (' + pendingCount + ') are excluded from that number.';
+      if (typeof result.unconfirmed_net_minor === 'number') {
+        text += ar
+          ? ' صافيها لوحده ' + spokenAmount(result.unconfirmed_net_minor, result.currency, 'ar') + '.'
+          : ' Shown separately, their net is ' + formatMoney(result.unconfirmed_net_minor, result.currency) + '.';
+      }
+    }
+    if (hasExcludedReason(result.excluded, 'unreceived_payout') || hasExcludedReason(result.excluded, 'payout_not_added')) {
+      text += ar
+        ? ' قبض الجمعية المتوقع مش محسوب غير لما تأكّد إنك استلمت الفلوس فعلًا.'
+        : " An expected gam'eya payout is not included until you confirm receiving it.";
     }
     if (cost) {
-      var left = result.safe_to_spend_minor - cost.amount;
-      if (left >= 0) text += ' ' + formatMoney(cost.amount, cost.currency) + ' fits in that ' + total + ' and leaves ' + formatMoney(left, cost.currency) + '.';
-      else text += ' ' + formatMoney(cost.amount, cost.currency) + ' exceeds that ' + total + ' by ' + formatMoney(-left, cost.currency) + '.';
+      var left = totalMinor - cost.amount;
+      text += ar
+        ? ' لو صرفت ' + spokenAmount(cost.amount, cost.currency, 'ar') + ' دلوقتي، المتاح التقديري بعد الشراء هيبقى ' + spokenAmount(left, cost.currency, 'ar') + '. ده مش موافقة على الشراء ولا ضمان.'
+        : ' If you spend ' + formatMoney(cost.amount, cost.currency) + ' now, estimated remaining headroom becomes ' + formatMoney(left, cost.currency) + '. This is not approval or a guarantee.';
     }
     return text;
   }
@@ -3329,12 +3467,14 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return Object.assign({}, result, { missing: missing, excluded: excluded });
   }
 
-  function runwaySafeToSpend(state) {
+  function runwaySafeToSpend(state, lang) {
     var engine = runwayEngine();
     var src = asState(state);
     if (!engine) {
       return {
-        explanation: 'Status: insufficient data. No safe-to-spend number was calculated. Missing or stale inputs: payday_runway.',
+        explanation: lang === 'ar'
+          ? 'البيانات مش كفاية: محتاج payday_runway. مش هخمّن لك مبلغ تقدر تصرفه.'
+          : 'insufficient data: I still need payday_runway. I won\'t guess a spendable amount.',
         assumed: ['payday_runway'],
         currency: typeof src.currency === 'string' ? src.currency : null,
         amount_minor: null,
@@ -3345,7 +3485,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     var built = buildRunwayInput(src);
     var result = withholdRunway(engine.evaluate(built.input), built.extraMissing, built.extraExcluded);
     return {
-      explanation: runwayExplanation(result, null),
+      explanation: runwayExplanation(result, null, lang),
       assumed: result.missing.slice(),
       currency: result.currency,
       amount_minor: result.safe_to_spend_minor,
@@ -3354,11 +3494,11 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     };
   }
 
-  function runwayCanAfford(state, parsed) {
-    var safe = runwaySafeToSpend(state);
+  function runwayCanAfford(state, parsed, lang) {
+    var safe = runwaySafeToSpend(state, lang);
     if (safe.amount_minor == null || !safe.details || safe.details.status === 'insufficient data') {
       return {
-        explanation: runwayExplanation(safe.details, parsed),
+        explanation: runwayExplanation(safe.details, parsed, lang),
         assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
         currency: parsed.currency,
         amount_minor: null,
@@ -3369,7 +3509,9 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
     if (parsed.currency !== safe.currency) {
       return {
-        explanation: 'Cannot compare ' + formatMoney(parsed.amount, parsed.currency) + ' with ' + safe.currency + '. Currencies are never converted or mixed. Status: insufficient data.',
+        explanation: lang === 'ar'
+          ? 'مش هقارن ' + spokenAmount(parsed.amount, parsed.currency, 'ar') + ' مع ' + safe.currency + '. مفيش تحويل ولا خلط عملات. البيانات مش كفاية.'
+          : 'Cannot compare ' + formatMoney(parsed.amount, parsed.currency) + ' with ' + safe.currency + '. Currencies are never converted or mixed. Status: insufficient data.',
         assumed: uniqSort(['currency_mismatch'].concat(parsed.assumed)),
         currency: null,
         amount_minor: null,
@@ -3380,7 +3522,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
     var left = safe.amount_minor - parsed.amount;
     return {
-      explanation: runwayExplanation(safe.details, parsed),
+      explanation: runwayExplanation(safe.details, parsed, lang),
       assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
       currency: parsed.currency,
       amount_minor: left,
@@ -3391,10 +3533,13 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
   }
 
   function safeToSpend(state, options) {
+    var lang = options && options.lang === 'ar' ? 'ar' : 'en';
     if (runwayEnabled(state)) {
-      var runway = runwaySafeToSpend(state);
+      var runway = runwaySafeToSpend(state, lang);
       if (options && options.category) {
-        runway = Object.assign({}, runway, { explanation: runway.explanation + ' A category limit was not applied.' });
+        runway = Object.assign({}, runway, {
+          explanation: runway.explanation + (lang === 'ar' ? ' حد التصنيف متطبقش.' : ' A category limit was not applied.')
+        });
       }
       return runway;
     }
@@ -3425,17 +3570,27 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
     var assumed = safeAssumptions(report, categoryMissing);
     var explanation;
+    var tighter = budgetRemaining != null && budgetRemaining < safeCash;
     if (report.cash == null) {
-      explanation = 'No spendable balance was calculated. A verified balance with a timestamp, or a self-reported balance with balanceReportedAt, is required. No balance was invented. ' + explainCommon(report, assumed);
+      explanation = lang === 'ar'
+        ? 'البيانات مش كفاية: محتاج رصيد إنت دخلته ومعاه وقت التسجيل. مش هخمّن لك مبلغ تقدر تصرفه. مفيش رصيد اتاخترع. '
+        : 'insufficient data: I still need a balance you entered, with the time you entered it. I won\'t guess a spendable amount. No balance was invented. ';
+      explanation += explainCommon(report, assumed, lang);
+    } else if (lang === 'ar') {
+      explanation = 'المتاح تقديريًا للمصاريف الاختيارية هو ' + spokenAmount(safe, report.currency, 'ar') + '، على حسب الرصيد والالتزامات اللي إنت دخلتها. ده تقدير مش ضمان؛ أي مصاريف أو التزامات ناقصة ممكن تغيّره. ';
+      if (report.track === 'verified' && report.selfReported != null) explanation += 'الرصيد التاني اللي كتبته متضافش. ';
+      else explanation += 'ده من بيانات إنت دخلتها، مش من البنك. ';
+      if (tighter) explanation += 'المتبقي من ميزانية الشهر هو الحد الأضيق. ';
+      explanation += explainCommon(report, assumed, 'ar');
     } else if (report.track === 'verified') {
-      explanation = 'Safe to spend is ' + formatMoney(safe, report.currency) + ' using the verified balance only. ';
-      if (report.selfReported != null) explanation += 'The self-reported balance was kept separate and was not added. ';
-      if (budgetRemaining != null && budgetRemaining < safeCash) explanation += 'The monthly budget remaining is the tighter limit. ';
-      explanation += explainCommon(report, assumed);
+      explanation = 'Your estimated discretionary amount is ' + formatMoney(safe, report.currency) + ', based on the balance you entered in Folio. This is not a balance your bank confirmed. It\'s not a guarantee; missing spending or dues could change it. ';
+      if (report.selfReported != null) explanation += 'The separate self-reported balance was not added. ';
+      if (tighter) explanation += 'The monthly budget remaining is the tighter limit. ';
+      explanation += explainCommon(report, assumed, 'en');
     } else {
-      explanation = 'Safe to spend is ' + formatMoney(safe, report.currency) + ' using the self-reported balance, because no verified balance was provided. ';
-      if (budgetRemaining != null && budgetRemaining < safeCash) explanation += 'The monthly budget remaining is the tighter limit. ';
-      explanation += explainCommon(report, assumed);
+      explanation = 'Your estimated discretionary amount is ' + formatMoney(safe, report.currency) + ', based on the self-reported balance and bills you entered. It\'s not a guarantee; missing spending or dues could change it. ';
+      if (tighter) explanation += 'The monthly budget remaining is the tighter limit. ';
+      explanation += explainCommon(report, assumed, 'en');
     }
     return {
       explanation: explanation,
@@ -3470,11 +3625,12 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return { amount: amount, currency: currency, assumed: assumed };
   }
 
-  function canAfford(state, cost) {
+  function canAfford(state, cost, options) {
+    var lang = options && options.lang === 'ar' ? 'ar' : 'en';
     var parsed = normalizeCost(cost, state);
     if (parsed.error) {
       return {
-        explanation: 'A positive integer cost in minor units is required. No price was guessed.',
+        explanation: lang === 'ar' ? 'محتاج مبلغ صحيح بالمليم. مش هخمّن السعر.' : 'A positive integer cost in minor units is required. No price was guessed.',
         assumed: ['cost'],
         currency: null,
         amount_minor: null,
@@ -3483,11 +3639,13 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
         details: {}
       };
     }
-    if (runwayEnabled(state)) return runwayCanAfford(state, parsed);
-    var safe = safeToSpend(state);
+    if (runwayEnabled(state)) return runwayCanAfford(state, parsed, lang);
+    var safe = safeToSpend(state, { lang: lang });
     if (parsed.currency !== safe.currency) {
       return {
-        explanation: 'Cannot compare ' + formatMoney(parsed.amount, parsed.currency) + ' with ' + safe.currency + '. Currencies are never converted or mixed.',
+        explanation: lang === 'ar'
+          ? 'مش هقارن ' + spokenAmount(parsed.amount, parsed.currency, 'ar') + ' مع ' + safe.currency + '. مفيش تحويل ولا خلط عملات.'
+          : 'Cannot compare ' + formatMoney(parsed.amount, parsed.currency) + ' with ' + safe.currency + '. Currencies are never converted or mixed.',
         assumed: ['no_fx_conversion'],
         currency: null,
         amount_minor: null,
@@ -3498,7 +3656,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
     if (safe.amount_minor == null) {
       return {
-        explanation: 'Affordability needs a safe-to-spend figure. ' + safe.explanation,
+        explanation: (lang === 'ar' ? 'التقدير محتاج رقم للمتاح. ' : 'The estimate needs a discretionary figure. ') + safe.explanation,
         assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
         currency: parsed.currency,
         amount_minor: null,
@@ -3508,11 +3666,11 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       };
     }
     var left = safe.amount_minor - parsed.amount;
-    var verdict = left >= 0
-      ? 'Yes. ' + formatMoney(parsed.amount, parsed.currency) + ' fits in safe to spend of ' + formatMoney(safe.amount_minor, parsed.currency) + ', leaving ' + formatMoney(left, parsed.currency) + '. '
-      : 'No. ' + formatMoney(parsed.amount, parsed.currency) + ' exceeds safe to spend of ' + formatMoney(safe.amount_minor, parsed.currency) + ' by ' + formatMoney(-left, parsed.currency) + '. ';
+    var verdict = lang === 'ar'
+      ? 'لو صرفت ' + spokenAmount(parsed.amount, parsed.currency, 'ar') + ' دلوقتي، المتاح التقديري بعد الشراء هيبقى ' + spokenAmount(left, parsed.currency, 'ar') + '. ده مش موافقة على الشراء ولا ضمان. '
+      : 'If you spend ' + formatMoney(parsed.amount, parsed.currency) + ' now, estimated remaining headroom becomes ' + formatMoney(left, parsed.currency) + '. This is not approval or a guarantee. ';
     return {
-      explanation: verdict + 'Planned income was not treated as received cash. ' + safe.explanation,
+      explanation: verdict + (lang === 'ar' ? 'الدخل المخطط مش فلوس متاحة دلوقتي. ' : 'Planned income was not treated as received cash. ') + safe.explanation,
       assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
       currency: parsed.currency,
       amount_minor: left,
@@ -3532,12 +3690,15 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return uniqSort(assumed);
   }
 
-  function monthEndProjection(state) {
+  function monthEndProjection(state, options) {
+    var lang = options && options.lang === 'ar' ? 'ar' : 'en';
     var report = analyze(state);
     if (!report.clock) {
       var blocked = projectionAssumptions(report, []);
       return {
-        explanation: 'A clock is required to place month end. Pass state.now as epoch milliseconds. Nothing was projected. ' + explainCommon(report, blocked),
+        explanation: (lang === 'ar'
+          ? 'محتاج الساعة عشان أحدد آخر الشهر. مفيش توقع اتعمل. '
+          : 'A clock is required to place month end. Pass state.now as epoch milliseconds. Nothing was projected. ') + explainCommon(report, blocked, lang),
         assumed: blocked,
         currency: report.currency,
         amount_minor: null,
@@ -3568,7 +3729,9 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     var assumed = projectionAssumptions(report, extra);
     if (report.cash == null) {
       return {
-        explanation: 'Month-end cash was not projected because no opening balance was available. No balance was invented. ' + explainCommon(report, assumed),
+        explanation: (lang === 'ar'
+          ? 'متوقعتش فلوس آخر الشهر لأن مفيش رصيد بداية. مفيش رصيد اتاخترع. الدخل المخطط مش فلوس متاحة دلوقتي. '
+          : 'Month-end cash was not projected because no opening balance was available. No balance was invented. Planned income is not money available now. ') + explainCommon(report, assumed, lang),
         assumed: assumed,
         currency: report.currency,
         amount_minor: null,
@@ -3577,17 +3740,25 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       };
     }
     var projected = report.cash + plannedRemaining - outflow;
-    var trackLabel = report.track === 'verified' ? 'verified balance' : 'self-reported balance';
-    var explanation = 'Projected month-end cash is ' + formatMoney(projected, report.currency) +
-      '. This starts from the ' + trackLabel + ' cash of ' + formatMoney(report.cash, report.currency) +
-      ', adds planned income not yet received (' + formatMoney(plannedRemaining, report.currency) +
-      '), and subtracts expected outflow of ' + formatMoney(outflow, report.currency) +
-      '. Received income this month is ' + formatMoney(received, report.currency) +
-      ' and is not the same figure as planned income. ';
-    if (report.track === 'verified' && report.selfReported != null) {
-      explanation += 'The self-reported balance was kept separate and was not added. ';
+    var explanation;
+    if (lang === 'ar') {
+      explanation = 'توقع فلوس آخر الشهر تقديري ' + spokenAmount(projected, report.currency, 'ar') +
+        '. الدخل المخطط اللي لسه متستلمش (' + spokenAmount(plannedRemaining, report.currency, 'ar') +
+        ') مش فلوس متاحة دلوقتي. التقدير بيبدأ من الرصيد اللي إنت دخلته ' + spokenAmount(report.cash, report.currency, 'ar') +
+        '، وبيخصم مصروف متوقع ' + spokenAmount(outflow, report.currency, 'ar') +
+        '. الدخل المستلم الشهر ده ' + spokenAmount(received, report.currency, 'ar') +
+        ' وده غير الدخل المخطط. ده تقدير مش ضمان. ';
+      if (report.track === 'verified' && report.selfReported != null) explanation += 'الرصيد التاني اللي كتبته متضافش. ';
+    } else {
+      explanation = 'Projected month-end cash is an estimate of ' + formatMoney(projected, report.currency) +
+        '. Planned income not yet received (' + formatMoney(plannedRemaining, report.currency) +
+        ') is not money available now. This starts from the balance you entered of ' + formatMoney(report.cash, report.currency) +
+        ', and subtracts expected outflow of ' + formatMoney(outflow, report.currency) +
+        '. Received income this month is ' + formatMoney(received, report.currency) +
+        ' and is not the same figure as planned income. It\'s not a guarantee. ';
+      if (report.track === 'verified' && report.selfReported != null) explanation += 'The separate self-reported balance was not added. ';
     }
-    explanation += explainCommon(report, assumed);
+    explanation += explainCommon(report, assumed, lang);
     return {
       explanation: explanation,
       assumed: assumed,
@@ -3598,7 +3769,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     };
   }
 
-  function categorySpend(state, category) {
+  function categorySpend(state, category, lang) {
     var report = analyze(state);
     var set = flagSet(report.assumed);
     var assumed = selectFlags(set, ['currency', 'conflicting_fields', 'transactions', 'invalid_transaction', 'transaction_missing_currency']);
@@ -3622,9 +3793,15 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       total = name ? (report.byCategory[name] || 0) : report.monthExpense;
     }
     var subject = name || 'all categories';
-    var explanation = 'Spent ' + formatMoney(total, report.currency) + ' on ' + subject + ' ' + windowNote + '. ';
-    if (report.foreignTx) explanation += 'Excluded ' + report.foreignTx + ' entry(s) in another currency. Nothing was converted. ';
-    if (assumed.length) explanation += 'Assumed defaults for missing inputs: ' + assumed.join(', ') + '.';
+    var explanation;
+    if (lang === 'ar') {
+      explanation = 'المصروف المسجل ' + spokenAmount(total, report.currency, 'ar') + ' على ' + subject + (report.clock ? ' في ' + report.clock.key : '') + '. ده من اللي إنت دخلته، مش رقم من البنك. ';
+      if (report.foreignTx) explanation += 'استبعدنا ' + report.foreignTx + ' حركة بعملة تانية. مفيش تحويل. ';
+    } else {
+      explanation = 'Spent ' + formatMoney(total, report.currency) + ' on ' + subject + ' ' + windowNote + '. ';
+      if (report.foreignTx) explanation += 'Excluded ' + report.foreignTx + ' entry(s) in another currency. Nothing was converted. ';
+      if (assumed.length) explanation += 'Assumed defaults for missing inputs: ' + assumed.join(', ') + '.';
+    }
     return {
       explanation: explanation,
       assumed: assumed,
@@ -3641,20 +3818,31 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       hasAr(text, 'وضع') || hasAr(text, 'صرفنا') || hasAr(text, 'ملخص');
   }
 
-  function summaryAnswer(state) {
-    var spent = categorySpend(state, null);
-    var safe = safeToSpend(state);
+  function summaryAnswer(state, lang) {
+    var spent = categorySpend(state, null, lang);
+    var safe = safeToSpend(state, { lang: lang });
     var income = spent.details.month_income_minor == null ? 0 : spent.details.month_income_minor;
     var expense = spent.details.month_expense_minor == null ? spent.amount_minor : spent.details.month_expense_minor;
     var planned = safe.details.planned_income_minor;
-    var parts = [
-      'This month you recorded ' + formatMoney(income, spent.currency) + ' received income and ' + formatMoney(expense, spent.currency) + ' spending.'
-    ];
-    if (planned != null) parts.push('Planned income of ' + formatMoney(planned, spent.currency) + ' is a salary plan, not received cash.');
-    else parts.push('No planned income is on file.');
-    if (safe.amount_minor == null) parts.push('Safe to spend is unavailable until a balance snapshot with a time is recorded.');
-    else parts.push('Safe to spend from the ' + (safe.balance_track === 'verified' ? 'verified' : 'self-reported') + ' balance is ' + formatMoney(safe.amount_minor, safe.currency) + '.');
-    if (!asState(state).transactions || !asState(state).transactions.length) parts.push('No transactions have been recorded yet.');
+    var parts;
+    if (lang === 'ar') {
+      parts = ['الشهر ده المسجل ' + spokenAmount(income, spent.currency, 'ar') + ' دخل مستلم و' + spokenAmount(expense, spent.currency, 'ar') + ' مصروف.'];
+      if (planned != null) parts.push('الدخل المخطط ' + spokenAmount(planned, spent.currency, 'ar') + ' خطة مرتب، مش فلوس متاحة دلوقتي.');
+      else parts.push('مفيش دخل مخطط مسجل.');
+      if (safe.amount_minor == null) parts.push('المتاح التقديري مش متاح غير لما تسجل رصيد ومعاه الوقت.');
+      else parts.push('المتاح تقديريًا من الرصيد اللي إنت دخلته هو ' + spokenAmount(safe.amount_minor, safe.currency, 'ar') + '. ده تقدير مش ضمان.');
+    } else {
+      parts = [
+        'This month you recorded ' + formatMoney(income, spent.currency) + ' received income and ' + formatMoney(expense, spent.currency) + ' spending.'
+      ];
+      if (planned != null) parts.push('Planned income of ' + formatMoney(planned, spent.currency) + ' is a salary plan, not received cash.');
+      else parts.push('No planned income is on file.');
+      if (safe.amount_minor == null) parts.push('An estimated discretionary amount needs a balance you entered, with the time you entered it.');
+      else parts.push('The estimated discretionary amount from the balance you entered is ' + formatMoney(safe.amount_minor, safe.currency) + '. It\'s not a guarantee.');
+    }
+    if (!asState(state).transactions || !asState(state).transactions.length) {
+      parts.push(lang === 'ar' ? 'مفيش حركات مسجلة لسه.' : 'No transactions have been recorded yet.');
+    }
     return parts.join(' ');
   }
 
@@ -3727,12 +3915,45 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return { action: action, proposal: proposal };
   }
 
-  function writeAnswer(parsed, blocked) {
-    var money = parsed.amount_minor == null ? null : formatMoney(parsed.amount_minor, parsed.currency || 'EGP');
+  function writeAnswer(parsed, blocked, lang) {
+    var money = parsed.amount_minor == null ? null : spokenAmount(parsed.amount_minor, parsed.currency || 'EGP', lang);
+    if (lang === 'ar') {
+      if (parsed.intent === 'set_balance') {
+        if (money == null) return 'أكتب الرصيد اللي عايز تسجله؟ ده رقم إنت بتدخله، مش رقم من البنك.';
+        if (blocked) return money + ' مش مطابق للعملة المفتوحة. مش هيتحول ومش هيتسجل بعملة تانية.';
+        return 'أقدر أسجل رصيد إنت دخلته بقيمة ' + money + '. ده مش رقم البنك أكده. أكد قبل أي حفظ.';
+      }
+      if (parsed.intent === 'set_salary') {
+        if (money == null) return 'الدخل الشهري المتوقع كام؟ ده تخطيط ومش هيتعمل حركة دخل مستلم.';
+        if (blocked) return money + ' مش مطابق للعملة المفتوحة. خطة المرتب متسجلتش ومفيش تحويل.';
+        return 'أحفظ الدخل الشهري المتوقع ' + money + '؟ ده خطة ومش فلوس متاحة دلوقتي، ومش هيتعمل حركة دخل مستلم. أكد قبل أي حفظ.';
+      }
+      if (parsed.intent === 'set_budget') {
+        if (money == null) return 'حد الصرف الشهري كام؟';
+        if (blocked) return money + ' مش مطابق للعملة المفتوحة. الميزانية متسجلتش ومفيش تحويل.';
+        if (parsed.category) return 'أحدد ميزانية ' + parsed.category + ' الشهرية على ' + money + '؟ أكد قبل أي حفظ.';
+        return 'أحدد هدف الصرف الشهري على ' + money + '؟ ده منفصل عن ميزانيات التصنيف. أكد قبل أي حفظ.';
+      }
+      if (parsed.intent === 'add_expense') {
+        if (money == null) return 'المصروف كان كام؟';
+        if (blocked) return money + ' مش مطابق للعملة المفتوحة. المصروف متسجلش ومفيش تحويل.';
+        return 'أضيف مصروف ' + money + (parsed.merchant ? ' لـ ' + parsed.merchant : '') + ' في ' + (parsed.category || 'Other') + '؟ أكد قبل أي حفظ.';
+      }
+      if (parsed.intent === 'add_income') {
+        if (money == null) return 'الدخل المستلم كام؟ ده فلوس وصلت، مش خطة المرتب.';
+        if (blocked) return money + ' مش مطابق للعملة المفتوحة. الدخل متسجلش ومفيش تحويل.';
+        return 'أضيف ' + money + ' دخل مستلم في ' + (parsed.category || 'Other income') + '؟ ده مش هيغير خطة المرتب. أكد قبل أي حفظ.';
+      }
+      if (parsed.intent === 'savings_goal') {
+        if (money == null) return 'هدف الادخار كام؟ ده مش هينقل فلوس.';
+        return 'أقدر أحفظ هدف ادخار ' + money + (parsed.category ? ' لـ ' + parsed.category : '') + '. ده مش هينقل فلوس. أكد قبل أي حفظ.';
+      }
+      return 'أكد قبل أي حفظ.';
+    }
     if (parsed.intent === 'set_balance') {
-      if (money == null) return 'What self-reported balance should I record? This is not verified with your bank.';
+      if (money == null) return 'What balance should I record? This is a number you enter, not one your bank confirmed.';
       if (blocked) return money + ' is explicit, and it does not match the open ledger. Folio will not convert or file it under a different currency.';
-      return 'I can record a self-reported balance snapshot of ' + money + '. This is not a verified bank balance. Confirm before anything is saved.';
+      return 'I can record a balance you entered of ' + money + '. This is not a balance your bank confirmed. Confirm before anything is saved.';
     }
     if (parsed.intent === 'set_salary') {
       if (money == null) return 'What expected monthly income should I plan for? This will not create a received-income transaction.';
@@ -3764,6 +3985,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
 
   function planCommand(input, stateObject) {
     var ledger = stateObject && typeof stateObject === 'object' ? stateObject : ambientState();
+    var lang = questionLanguage(input);
     var parsed = parse(input, { currency: ledger && ledger.currency });
     var legacy = false;
     var answer;
@@ -3771,26 +3993,28 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     var proposal = null;
     if (parsed.intent === 'unknown' && isLegacySummaryText(prepare(input).text)) {
       legacy = true;
-      answer = summaryAnswer(ledger || {});
+      answer = summaryAnswer(ledger || {}, lang);
     } else if (parsed.intent === 'can_afford') {
-      if (parsed.amount_minor == null) answer = 'How much would this purchase cost? Please include an amount.';
-      else answer = canAfford(ledger || {}, { amount_minor: parsed.amount_minor, currency: parsed.currency }).explanation;
+      if (parsed.amount_minor == null) answer = lang === 'ar' ? 'الشراء ده بكام؟ اكتب المبلغ.' : 'How much would this purchase cost? Please include an amount.';
+      else answer = canAfford(ledger || {}, { amount_minor: parsed.amount_minor, currency: parsed.currency }, { lang: lang }).explanation;
     } else if (parsed.intent === 'safe_to_spend') {
-      answer = safeToSpend(ledger || {}, { category: parsed.category }).explanation;
+      answer = safeToSpend(ledger || {}, { category: parsed.category, lang: lang }).explanation;
     } else if (parsed.intent === 'category_spend') {
-      answer = categorySpend(ledger || {}, parsed.category).explanation;
+      answer = categorySpend(ledger || {}, parsed.category, lang).explanation;
     } else if (parsed.intent === 'month_end_projection') {
-      answer = monthEndProjection(ledger || {}).explanation;
+      answer = monthEndProjection(ledger || {}, { lang: lang }).explanation;
     } else if (WRITES[parsed.intent]) {
       var blocked = currencyMismatch(parsed, ledger || {});
-      answer = writeAnswer(parsed, blocked);
+      answer = writeAnswer(parsed, blocked, lang);
       if (parsed.amount_minor != null) {
         var built = buildLegacy(parsed);
         proposal = built.proposal;
         action = blocked ? undefined : built.action;
       }
     } else {
-      answer = 'I can record a self-reported balance, a salary plan, budgets, expenses, received income, and a savings goal. I can also estimate what you can afford, what is safe to spend, category spending, and a month-end projection. I will not guess.';
+      answer = lang === 'ar'
+        ? 'أقدر أسجل رصيد إنت دخلته، وخطة مرتب، وميزانيات، ومصروف، ودخل استلمته، وهدف ادخار. وأقدر أقدّر المتاح من البيانات دي، من غير تخمين ومن غير موافقة على شراء.'
+        : 'I can record a balance you entered, a salary plan, budgets, expenses, received income, and a savings goal. I can also estimate what fits, what is discretionary, category spending, and a month-end projection. I will not guess, and an estimate is not approval.';
     }
     return {
       intent: parsed.intent,
