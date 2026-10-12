@@ -204,6 +204,36 @@
     return '';
   }
 
+  // A stored ledger is already this person's workspace. A missing onboarding
+  // flag must not hide it behind setup, where finishing setup would replace it.
+  function storedWorkspaceHasLedger(state) {
+    if (!state || typeof state !== 'object') return false;
+    if (Array.isArray(state.transactions) && state.transactions.length > 0) return true;
+    if (Array.isArray(state.accounts)) {
+      for (let i = 0; i < state.accounts.length; i++) {
+        const account = state.accounts[i];
+        if (account && account.balanceMinor != null && Number.isFinite(Number(account.balanceMinor))) return true;
+      }
+    }
+    if (state.reportedBalanceMinor != null && Number.isFinite(Number(state.reportedBalanceMinor))) return true;
+    if (Number(state.monthlyIncomeMinor) > 0) return true;
+    if (Number(state.monthlyBudgetMinor) > 0) return true;
+    const budgets = state.budgets;
+    if (budgets && typeof budgets === 'object') {
+      const currencies = Object.keys(budgets);
+      for (let i = 0; i < currencies.length; i++) {
+        const rows = budgets[currencies[i]];
+        if (!rows || typeof rows !== 'object') continue;
+        const names = Object.keys(rows);
+        for (let j = 0; j < names.length; j++) {
+          const amount = Number(rows[names[j]]);
+          if (Number.isFinite(amount) && amount !== 0) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function migrate(input, corruptText) {
     if (typeof corruptText === 'string') {
       return {
@@ -313,6 +343,7 @@
     }).filter(Boolean);
     state.legacyQueue = Array.isArray(input.legacyQueue) ? clone(input.legacyQueue) : [];
     assignRunway(state, input);
+    if (state.v2Onboarded !== true && storedWorkspaceHasLedger(state)) state.v2Onboarded = true;
     return { state: state, snapshot: snapshot, migrated: needsMigration };
   }
 

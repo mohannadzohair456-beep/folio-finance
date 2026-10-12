@@ -245,6 +245,31 @@ assert.equal(phoneAgain.state.budgets.EGP['Food & drinks'], 350000);
 assert.equal(phoneAgain.state.transactions.length, 7);
 assert.equal(phoneAgain.snapshot, null);
 
+const flaglessLedger = FolioData.migrate({
+  schemaVersion: 1,
+  currency: 'EGP',
+  v2Onboarded: false,
+  reportedBalanceMinor: 842050,
+  monthlyIncomeMinor: 1500000,
+  monthlyBudgetMinor: 900000,
+  budgets: { EGP: { 'Food & drinks': 350000 } },
+  transactions: [{ id: 'market', merchant: 'Carrefour', amountMinor: 12550, currency: 'EGP', direction: 'expense', category: 'Food & drinks', occurredAt: Date.UTC(2026, 9, 11), source: 'manual' }]
+}, null);
+assert.equal(flaglessLedger.state.v2Onboarded, true, 'a schema-1 ledger is onboarded even when the flag is false');
+assert.equal(flaglessLedger.state.budgets.EGP['Food & drinks'], 350000, 'schema 1 budgets are not doubled');
+assert.equal(flaglessLedger.state.reportedBalanceMinor, 842050);
+assert.equal(flaglessLedger.state.transactions[0].merchant, 'Carrefour');
+const majorBudgetOnly = FolioData.migrate({ currency: 'EGP', budgets: { EGP: { 'Food & drinks': 3500 } } }, null);
+assert.equal(majorBudgetOnly.state.v2Onboarded, true, 'a v0.2.33 category budget is a ledger');
+assert.equal(majorBudgetOnly.state.budgets.EGP['Food & drinks'], 350000, 'schema 0 budgets convert once');
+const emptyWorkspace = FolioData.migrate({ currency: 'EGP', v2Onboarded: false, transactions: [], budgets: {}, reportedBalanceMinor: null, monthlyIncomeMinor: 0, monthlyBudgetMinor: 0 }, null);
+assert.equal(emptyWorkspace.state.v2Onboarded, false, 'an empty workspace still opens onboarding');
+const zeroBalance = FolioData.migrate({ currency: 'EGP', reportedBalanceMinor: 0 }, null);
+assert.equal(zeroBalance.state.v2Onboarded, true, 'an entered zero balance is stored data');
+const demoOnly = FolioData.migrate({ demo: true, transactions: [{ source: 'demo', id: 'sample', merchant: 'Carrefour', amountMinor: 100, currency: 'EGP', direction: 'expense', occurredAt: Date.now() }] }, null);
+assert.equal(demoOnly.state.transactions.length, 0);
+assert.equal(demoOnly.state.v2Onboarded, false, 'removed sample rows are not a ledger');
+
 const booksOnly = FolioData.migrate({
   currency: 'SAR',
   reportedBalanceMinor: 250000,

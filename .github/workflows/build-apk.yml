@@ -62,6 +62,8 @@ jobs:
         run: node tests/assistant.test.cjs
       - name: Test payday runway
         run: node tests/payday-runway.test.cjs
+      - name: Test upgrade boot does not hide a stored ledger
+        run: node tests/upgrade-boot.test.cjs
       - name: Compile release without signing secrets
         if: github.event_name == 'pull_request'
         run: chmod +x android/gradlew && android/gradlew -p android assembleRelease --no-daemon
