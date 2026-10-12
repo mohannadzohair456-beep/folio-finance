@@ -176,6 +176,79 @@ def tap_point(node, height, safe_margin=140, gesture_margin=72):
     return None
 
 
+# Old-app setup only. The post-upgrade survival checks are not retried here.
+SETUP_STEP_ATTEMPTS = 3
+SETUP_NODE_WAIT_SECONDS = 25
+SETUP_SCROLL_LIMIT = 3
+SETUP_TAB_LIMIT = 4
+SETUP_WAIT_LIMIT = 2
+
+
+def node_packages(nodes):
+    return {node.get("package") or "" for node in nodes if node.get("package")}
+
+
+def blocker_kind(blob, packages):
+    """Why the old app cannot be driven, or None when Folio is in front.
+
+    An ANR dialog is checked before the package set. Pixel Launcher's
+    "isn't responding" card replaces the tree, and the home screen does too.
+    """
+    lowered = (blob or "").lower()
+    if "isn't responding" in lowered or "not responding" in lowered:
+        return "anr"
+    pkgs = {pkg for pkg in packages if pkg}
+    if not pkgs or PKG in pkgs:
+        return None
+    if any("launcher" in pkg for pkg in pkgs):
+        return "launcher"
+    return "covered"
+
+
+def label_focused(nodes, label):
+    wanted = (label or "").lower()
+    if not wanted:
+        return False
+    for node in nodes:
+        if not node.get("focused"):
+            continue
+        if not str(node.get("class") or "").endswith("EditText"):
+            continue
+        if wanted in (node.get("text") or "").lower():
+            return True
+    return False
+
+
+def next_setup_probe(found, keyboard, blocker, scrolls_done, tabs_done, waits_done,
+                     clipped=False, anchor=False, scroll_limit=SETUP_SCROLL_LIMIT,
+                     tab_limit=SETUP_TAB_LIMIT, wait_limit=SETUP_WAIT_LIMIT):
+    """One bounded action while the old app's target is not ready.
+
+    A launcher ANR or a covered Folio is recovered before any tap or scroll.
+    The number pad hides the spending-target row, so a swipe while the
+    keyboard is up is not a scroll. Re-dump a couple of times before tabbing
+    or scrolling: the accessibility tree lags the pixels, and scrolling a
+    visible field pushes it off the page.
+    """
+    if blocker:
+        return "recover"
+    # The pad hides the next row. A hit under it can type into the field
+    # that is already focused, so the pad goes away before any tap or scroll.
+    if keyboard:
+        return "dismiss-keyboard"
+    if found:
+        return "tap"
+    if clipped and scrolls_done < scroll_limit:
+        return "scroll"
+    if waits_done < wait_limit:
+        return "wait"
+    if anchor and tabs_done < tab_limit:
+        return "tab"
+    if scrolls_done < scroll_limit:
+        return "scroll"
+    return "wait"
+
+
 # The row renders the Unicode minus used by the app: −EGP 125.50.
 # Cash-flow text can also expose the same expense as EGP−125.5.
 EXPENSE_125 = (
@@ -205,22 +278,23 @@ class Driver:
         self.step = 0
         self.width, self.height = 1080, 1920
 
-    def run(self, args, check=True, timeout=60):
-        print("+", " ".join(args), flush=True)
+    def run(self, args, check=True, timeout=60, quiet=False):
+        if not quiet:
+            print("+", " ".join(args), flush=True)
         result = subprocess.run(args, text=True, capture_output=True, timeout=timeout)
-        if result.stdout:
+        if not quiet and result.stdout:
             print(result.stdout[-2000:], flush=True)
-        if result.stderr:
+        if not quiet and result.stderr:
             print(result.stderr[-2000:], flush=True)
         if check and result.returncode != 0:
             raise DriveError("command failed: " + " ".join(args))
         return result
 
-    def adb(self, *args, check=True, timeout=60):
-        return self.run(["adb", *args], check=check, timeout=timeout)
+    def adb(self, *args, check=True, timeout=60, quiet=False):
+        return self.run(["adb", *args], check=check, timeout=timeout, quiet=quiet)
 
-    def shell(self, script, check=True, timeout=60):
-        return self.adb("shell", script, check=check, timeout=timeout)
+    def shell(self, script, check=True, timeout=60, quiet=False):
+        return self.adb("shell", script, check=check, timeout=timeout, quiet=quiet)
 
     def shot(self, name):
         self.step += 1
@@ -334,6 +408,7 @@ class Driver:
                             nodes.append({
                                 "text": text,
                                 "class": node.attrib.get("class") or "",
+                                "package": node.attrib.get("package") or "",
                                 "clickable": False,
                                 "focused": node.attrib.get("focused") == "true",
                                 "x1": x1, "y1": y1, "x2": x2, "y2": y2,
@@ -343,6 +418,7 @@ class Driver:
                     nodes.append({
                         "text": text,
                         "class": node.attrib.get("class") or "",
+                        "package": node.attrib.get("package") or "",
                         "clickable": node.attrib.get("clickable") == "true",
                         "focused": node.attrib.get("focused") == "true",
                         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
@@ -554,26 +630,33 @@ class Driver:
             time.sleep(0.35)
         return False
 
-    def leave_step(self, button, after, forbid=(), attempts=3):
+    def leave_step(self, button, after, forbid=(), attempts=SETUP_STEP_ATTEMPTS):
         """Leave an onboarding step once `after` is on screen.
 
         Retries a coordinate tap, then Tab/Enter, and waits for the WebView
         to show the next step. A tap that does not change the page is a miss.
+        The keyboard stays down so the footer is not covered, and an ANR or
+        the launcher is cleared before the tap. This does not run after the
+        candidate is installed.
         """
-        self.hide_keyboard()
-        time.sleep(0.6)
+        print("step", button, flush=True)
         for attempt in range(attempts):
-            self.hide_keyboard()
-            time.sleep(0.4)
-            if not self.tap_text(button, forbid=forbid, scrolls=3):
+            if attempt:
+                print("retry step", button, str(attempt + 1) + "/" + str(attempts), flush=True)
+            if self.tree_has(after):
+                print("step", button, "ok", flush=True)
+                return True
+            self.dismiss_keyboard_for_setup()
+            tapped = self.drive_setup_target(button, forbid=forbid, kind="button")
+            if not tapped:
                 print("tap missed", button, "trying focus", attempt, flush=True)
                 self.activate_focused_control(button)
             try:
                 self.wait_for(after, timeout=12)
+                print("step", button, "ok", flush=True)
                 return True
             except DriveError:
                 print("did not reach", after, "attempt", attempt, flush=True)
-                self.scroll_from_safe_area()
         return False
 
     def tap_control(self, needle, scrolls=2):
@@ -599,8 +682,236 @@ class Driver:
         return False
 
     def keyboard_shown(self):
-        result = self.shell("dumpsys input_method", check=False, timeout=25)
+        result = self.shell("dumpsys input_method", check=False, timeout=25, quiet=True)
         return "mInputShown=true" in (result.stdout or "")
+
+    def default_ime(self):
+        ime = self.shell("settings get secure default_input_method", check=False, quiet=True)
+        ident = (ime.stdout or "").strip()
+        if not ident or ident == "null" or any(ch.isspace() for ch in ident):
+            return ""
+        return ident
+
+    def dismiss_keyboard_for_setup(self):
+        """Hide the number pad and leave the IME disabled.
+
+        Re-enabling it while the previous balance field is still focused
+        opens the pad over the spending target. Digits are entered with
+        keyevents, which do not need the pad. Back is not used.
+        """
+        if not self.keyboard_shown():
+            return False
+        print("dismissing keyboard", flush=True)
+        self.blur_inputs()
+        deadline = time.time() + 2.5
+        while time.time() < deadline and self.keyboard_shown():
+            time.sleep(0.3)
+        if not self.keyboard_shown():
+            print("keyboard dismissed", flush=True)
+            time.sleep(0.35)
+            return True
+        ident = self.default_ime()
+        if not ident:
+            print("keyboard still up", flush=True)
+            return False
+        self.shell("ime disable " + ident, check=False)
+        time.sleep(0.4)
+        if self.keyboard_shown():
+            print("keyboard still up", ident, flush=True)
+            return False
+        print("keyboard dismissed", ident, flush=True)
+        return True
+
+    def ensure_ime_enabled(self):
+        ident = self.default_ime()
+        if not ident:
+            print("no default ime", flush=True)
+            return
+        self.shell("ime enable " + ident, check=False)
+        print("ime enabled", ident, flush=True)
+
+    def recover_setup_screen(self, nodes):
+        """Dismiss an ANR or bring Folio forward. Does not force-stop Folio."""
+        kind = blocker_kind(self.blob(nodes), node_packages(nodes))
+        if not kind:
+            return False
+        if kind == "anr":
+            self.dismiss_anr(self.blob(nodes))
+            return True
+        print("folio not in front", kind, flush=True)
+        self.adb("shell", "am", "start", "-n", ACTIVITY)
+        time.sleep(1.0)
+        return True
+
+    def tree_has(self, needle):
+        nodes = self.dump_nodes()
+        print("redump", needle, "nodes", len(nodes), flush=True)
+        if self.recover_setup_screen(nodes):
+            return False
+        return needle.lower() in self.blob(nodes).lower()
+
+    def tappable_matches(self, nodes, needle, forbid=()):
+        ready = []
+        for node in self.candidates(nodes, needle, forbid):
+            point = tap_point(node, self.height)
+            if point and self.visible(node):
+                ready.append((node, point))
+        ready.sort(key=lambda item: (
+            item[0]["class"].startswith("ocr"),
+            not item[0]["class"].endswith("Button"),
+            not is_control_label(item[0]["text"], needle),
+            -item[1][1],
+        ))
+        return ready
+
+    def clipped_matches(self, nodes, needle, forbid=()):
+        clipped = []
+        for node in self.candidates(nodes, needle, forbid):
+            if self.visible(node) and tap_point(node, self.height) is None:
+                clipped.append(node)
+        return clipped
+
+    def tap_labeled_edit(self, nodes, label):
+        found = [node for node in self.candidates(nodes, label) if self.visible(node)]
+        if not found:
+            return False
+        found.sort(key=lambda node: (node["class"].startswith("ocr"), node["cy"]))
+        label_node = found[0]
+        if label_node["class"].endswith("EditText"):
+            self.tap_node(label_node)
+            return True
+        edits = [
+            node for node in self.edit_texts(nodes)
+            if node["cy"] >= label_node["y1"] - 10
+        ]
+        if edits:
+            edits.sort(key=lambda node: abs(node["cy"] - label_node["y2"]))
+            self.tap_node(edits[0])
+            return True
+        below = min(self.height - 8, label_node["y2"] + 70)
+        print(f"tap below {label_node['cx']},{below} {label!r}", flush=True)
+        self.shell(f"input tap {label_node['cx']} {below}")
+        time.sleep(0.5)
+        return True
+
+    def tab_from_anchor(self, nodes, anchor, needle):
+        print("tab to", needle, "from", anchor, flush=True)
+        if not label_focused(nodes, anchor):
+            if not self.tap_labeled_edit(nodes, anchor):
+                print("tab anchor missing", anchor, flush=True)
+                return False
+            time.sleep(0.3)
+        self.shell("input keyevent 61")
+        time.sleep(0.4)
+        return True
+
+    def drive_setup_target(self, needle, forbid=(), anchor=None, kind="field",
+                           require_focus=True, timeout=None, while_text=None):
+        """Wait for an old-app control, re-dumping until the timeout.
+
+        kind=button taps once the node is tappable. kind=field taps the
+        editor under the label and, when require_focus is set, returns only
+        after that editor is focused. Returns False when the budget runs out.
+        """
+        timeout = SETUP_NODE_WAIT_SECONDS if timeout is None else timeout
+        scrolls = 0
+        tabs = 0
+        waits = 0
+        deadline = time.time() + timeout
+        last = []
+        print("waiting for", needle, flush=True)
+        while time.time() < deadline:
+            nodes = self.dump_nodes()
+            last = nodes
+            print("redump", needle, "nodes", len(nodes), flush=True)
+            if kind == "field" and require_focus and label_focused(nodes, needle):
+                print("step", needle, "focused", flush=True)
+                return True
+            blocker = blocker_kind(self.blob(nodes), node_packages(nodes))
+            ready = [] if blocker else self.tappable_matches(nodes, needle, forbid)
+            clipped = [] if blocker else self.clipped_matches(nodes, needle, forbid)
+            keyboard = False if blocker else self.keyboard_shown()
+            action = next_setup_probe(
+                found=bool(ready),
+                keyboard=keyboard,
+                blocker=blocker,
+                scrolls_done=scrolls,
+                tabs_done=tabs,
+                waits_done=waits,
+                clipped=bool(clipped),
+                anchor=bool(anchor) and kind == "field",
+            )
+            print("setup", needle, action, flush=True)
+            if action == "recover":
+                self.recover_setup_screen(nodes)
+                time.sleep(0.6)
+                continue
+            if action == "dismiss-keyboard":
+                self.dismiss_keyboard_for_setup()
+                continue
+            if action == "tap":
+                if while_text and while_text.lower() not in self.blob(nodes).lower():
+                    # The button on this dump belongs to a different step.
+                    print("waiting for", while_text, flush=True)
+                    return False
+                if kind == "button":
+                    node, (x, y) = ready[0]
+                    self.tap_xy(x, y, node["text"])
+                    return True
+                self.tap_labeled_edit(nodes, needle)
+                if not require_focus:
+                    return True
+                check = self.dump_nodes()
+                print("redump", needle, "nodes", len(check), flush=True)
+                if label_focused(check, needle):
+                    print("step", needle, "focused", flush=True)
+                    return True
+                continue
+            if action == "tab":
+                tabs += 1
+                print("retry step", needle, "tab", str(tabs) + "/" + str(SETUP_TAB_LIMIT), flush=True)
+                self.tab_from_anchor(nodes, anchor, needle)
+                continue
+            if action == "scroll":
+                scrolls += 1
+                print("scroll to", needle, str(scrolls) + "/" + str(SETUP_SCROLL_LIMIT), flush=True)
+                self.scroll_from_safe_area()
+                continue
+            waits += 1
+            time.sleep(0.6)
+        sample = [node["text"] for node in last if node.get("text")][:8]
+        print("step", needle, "saw", sample, flush=True)
+        return False
+
+    def tap_setup_button(self, needle, confirm, forbid=(), while_text=None, attempts=None):
+        """Tap an old-app button and stop once `confirm` is on screen.
+
+        A later page that also says Continue is not tapped again: if `confirm`
+        is already up, the step is done. `while_text` must still be in the
+        same dump as the button, so a slow transition is not a second tap.
+        """
+        attempts = SETUP_STEP_ATTEMPTS if attempts is None else attempts
+        print("step", needle, flush=True)
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                print("retry step", needle, str(attempt) + "/" + str(attempts), flush=True)
+            if self.tree_has(confirm):
+                print("step", needle, "ok", flush=True)
+                return True
+            tapped = self.drive_setup_target(
+                needle, forbid=forbid, kind="button", while_text=while_text,
+            )
+            if not tapped:
+                print("step", needle, "not ready", flush=True)
+                continue
+            try:
+                self.wait_for(confirm, timeout=12)
+            except DriveError:
+                print("step", needle, "did not reach", confirm, flush=True)
+                continue
+            print("step", needle, "ok", flush=True)
+            return True
+        return False
 
     def blur_inputs(self):
         """Release the focused editor without tapping a dialog overlay.
@@ -723,47 +1034,19 @@ class Driver:
         return label.lower() in focused["text"].lower()
 
     def tap_field(self, label):
-        nodes = self.look(label)
-        found = [node for node in self.candidates(nodes, label) if self.visible(node)]
-        if not found:
-            if not self.tap_text(label, scrolls=2):
-                raise DriveError("could not find field " + label)
-            nodes = self.look(label)
-            found = [node for node in self.candidates(nodes, label) if self.visible(node)]
-        if not found:
+        # Text fields only need the tap. Numeric entry uses focus_field so a
+        # digit is never typed into the previous row. Setup search leaves the
+        # IME disabled; input text needs it enabled on this field.
+        if not self.drive_setup_target(label, kind="field", require_focus=False):
             raise DriveError("could not find field " + label)
-        found.sort(key=lambda node: (node["class"].startswith("ocr"), node["cy"]))
-        label_node = found[0]
-        edits = [
-            node for node in self.edit_texts(nodes)
-            if node["cy"] >= label_node["y1"] - 10
-        ]
-        if edits:
-            edits.sort(key=lambda node: abs(node["cy"] - label_node["y2"]))
-            self.tap_node(edits[0])
-            return
-        below = min(self.height - 8, label_node["y2"] + 70)
-        print(f"tap below {label_node['cx']},{below} {label!r}", flush=True)
-        self.shell(f"input tap {label_node['cx']} {below}")
-        time.sleep(0.5)
+        self.ensure_ime_enabled()
 
-    def focus_field(self, label):
+    def focus_field(self, label, anchor=None):
         # Drop the keyboard before the tap. On API 35 the number pad covers
         # the lower fields, and a tap there inserts a digit into the field
         # that is already focused. Do not type until that field is this one.
-        self.hide_keyboard()
-        if self.focus_matches(label):
-            return
-        self.tap_field(label)
-        if self.focus_matches(label):
-            return
-        print("tab to", label, flush=True)
-        for _ in range(5):
-            self.shell("input keyevent 61")
-            time.sleep(0.35)
-            if self.focus_matches(label):
-                return
-        raise DriveError("could not focus field " + label)
+        if not self.drive_setup_target(label, anchor=anchor, kind="field", require_focus=True):
+            raise DriveError("could not find field " + label)
 
     def focused_field_ok(self, value):
         focused = self.focused_edit()
@@ -779,20 +1062,34 @@ class Driver:
         self.shell("input keyevent " + " ".join(["67"] * 28))
         time.sleep(0.2)
 
-    def fill_labeled(self, label, value, numeric=False):
+    def fill_labeled(self, label, value, numeric=False, anchor=None):
         if not numeric:
             # The transaction sheet auto-focuses its first field. Blurring the
             # wordmark above that sheet clicks the overlay and closes it.
-            nodes = self.look(label)
+            # input text needs an IME; numeric setup leaves it disabled.
+            self.ensure_ime_enabled()
+            nodes = self.dump_nodes()
             if not self.candidates(nodes, label):
                 self.hide_keyboard()
             self.tap_field(label)
             self.type_text(value)
             return
-        for attempt in range(2):
-            self.focus_field(label)
+        last_error = None
+        for attempt in range(SETUP_STEP_ATTEMPTS):
+            if attempt:
+                print(
+                    "retry step", label,
+                    str(attempt + 1) + "/" + str(SETUP_STEP_ATTEMPTS),
+                    flush=True,
+                )
+            try:
+                self.focus_field(label, anchor=anchor)
+            except DriveError as exc:
+                last_error = exc
+                continue
             self.type_number(value)
             if self.focus_matches(label) and self.focused_field_ok(value):
+                print("step", label, "ok", flush=True)
                 return
             print("retry field", label, attempt, flush=True)
             # A miss can leave the previous field focused. Deleting there
@@ -801,6 +1098,8 @@ class Driver:
                 self.clear_focused_number()
             else:
                 print("refusing to clear a different field", flush=True)
+        if last_error:
+            raise last_error
         raise DriveError("could not enter " + label)
 
     def require(self, blob, needles, where):
@@ -1291,6 +1590,56 @@ Complete
         raise DriveError("safe center should be used")
     if "$((i + 1))" not in shell or "__PKG__" in shell or "__ACTIVITY__" in shell or PKG not in shell:
         raise DriveError("webview shell substitution failed: " + shell[:400])
+    if not (1 <= SETUP_STEP_ATTEMPTS <= 4):
+        raise DriveError("setup retries are not bounded")
+    if not (8 <= SETUP_NODE_WAIT_SECONDS <= 30):
+        raise DriveError("setup wait is not bounded")
+    if SETUP_SCROLL_LIMIT != 3 or SETUP_TAB_LIMIT != 4 or SETUP_WAIT_LIMIT != 2:
+        raise DriveError("setup probe limits drifted")
+    anr_blob = "Pixel Launcher isn't responding\nClose app\nWait"
+    if blocker_kind(anr_blob, {"android"}) != "anr":
+        raise DriveError("ANR dialog was not a blocker")
+    if blocker_kind("Meet Folio\nContinue", {PKG}) is not None:
+        raise DriveError("Folio in front was treated as blocked")
+    if blocker_kind("Photos", {"com.google.android.apps.nexuslauncher"}) != "launcher":
+        raise DriveError("launcher was not a blocker")
+    if blocker_kind("", set()) is not None:
+        raise DriveError("empty dump should be retried, not recovered")
+    if blocker_kind(anr_blob, {PKG, "android"}) != "anr":
+        raise DriveError("ANR text must win over a Folio package")
+    focused_nodes = [{
+        "text": "15000, Expected monthly income (EGP)",
+        "class": "android.widget.EditText",
+        "focused": True,
+    }]
+    if not label_focused(focused_nodes, "monthly income"):
+        raise DriveError("label_focused missed the income editor")
+    if label_focused(focused_nodes, "spending target"):
+        raise DriveError("label_focused matched the wrong editor")
+    if next_setup_probe(False, False, "anr", 0, 0, 0, clipped=True, anchor=True) != "recover":
+        raise DriveError("ANR must be recovered before a tap or scroll")
+    if next_setup_probe(True, True, None, 0, 0, 0) != "dismiss-keyboard":
+        raise DriveError("keyboard must go away before a tap")
+    if next_setup_probe(False, True, None, 0, 0, 0, anchor=True) != "dismiss-keyboard":
+        raise DriveError("covered spending target must dismiss the keyboard, not scroll")
+    if next_setup_probe(True, False, None, 0, 0, 0) != "tap":
+        raise DriveError("a tappable node should be tapped")
+    if next_setup_probe(False, False, None, 0, 0, 0, clipped=True) != "scroll":
+        raise DriveError("a clipped footer should scroll immediately")
+    if next_setup_probe(False, False, None, 0, 0, 0, anchor=True) != "wait":
+        raise DriveError("a missing field should be re-dumped before tab or scroll")
+    if next_setup_probe(False, False, None, 0, 0, SETUP_WAIT_LIMIT, anchor=True) != "tab":
+        raise DriveError("a missing field should tab from the previous field")
+    if next_setup_probe(
+        False, False, None, 0, SETUP_TAB_LIMIT, SETUP_WAIT_LIMIT, anchor=True,
+    ) != "scroll":
+        raise DriveError("tab budget should fall through to one scroll")
+    if next_setup_probe(
+        False, False, None, SETUP_SCROLL_LIMIT, SETUP_TAB_LIMIT, SETUP_WAIT_LIMIT, anchor=True,
+    ) != "wait":
+        raise DriveError("scroll budget must stop")
+    if next_setup_probe(False, False, "launcher", 0, 0, 0) != "recover":
+        raise DriveError("launcher should bring Folio forward")
     if upgrade_settled_home("YOUR MONEY, SIMPLIFIED\nMeet Folio.\nContinue"):
         raise DriveError("onboarding eyebrow was treated as the upgraded home")
     if not upgrade_settled_home("Your money, in focus.\nAvailable estimate · EGP 8,420.50\nEdit Carrefour"):
@@ -1319,21 +1668,22 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     driver.launch()
     driver.wait_for("Meet Folio", timeout=70)
     driver.shot("onboarding")
-    if not driver.tap_text("Continue", forbid=("Android",)):
+    if not driver.tap_setup_button(
+        "Continue", confirm="available balance", while_text="Meet Folio", forbid=("Android",),
+    ):
         raise DriveError("could not tap onboarding Continue")
-    driver.wait_for("available balance", timeout=20)
     driver.fill_labeled("available balance", "8420.50", numeric=True)
-    driver.fill_labeled("monthly income", "15000", numeric=True)
-    driver.fill_labeled("spending target", "9000", numeric=True)
+    driver.fill_labeled("monthly income", "15000", numeric=True, anchor="available balance")
+    driver.fill_labeled("spending target", "9000", numeric=True, anchor="monthly income")
     driver.shot("onboarding-filled")
     if not driver.leave_step("Continue", "Capture only", forbid=("Android",)):
         raise DriveError("could not leave the balance step")
-    if not driver.tap_text("Continue", forbid=("Android",)):
+    if not driver.tap_setup_button(
+        "Continue", confirm="Open Folio", while_text="Capture only", forbid=("Android",),
+    ):
         raise DriveError("could not skip notification access")
-    driver.wait_for("Open Folio", timeout=20)
-    if not driver.tap_text("Open Folio"):
+    if not driver.tap_setup_button("Open Folio", confirm="in focus", while_text="Open Folio"):
         raise DriveError("could not open Folio")
-    driver.wait_for("in focus", timeout=25)
 
     driver.scroll_to_top()
     time.sleep(0.4)
@@ -1344,7 +1694,7 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     driver.wait_for("New transaction", timeout=15)
     driver.fill_labeled("Merchant or source", "Carrefour")
     driver.hide_keyboard()
-    driver.fill_labeled("Amount", "125.50", numeric=True)
+    driver.fill_labeled("Amount", "125.50", numeric=True, anchor="Merchant or source")
     driver.hide_keyboard()
     if not driver.tap_control("Add transaction", scrolls=0):
         driver.hide_keyboard()
