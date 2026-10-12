@@ -177,6 +177,8 @@ def tap_point(node, height, safe_margin=140, gesture_margin=72):
 
 
 # Old-app setup only. The post-upgrade survival checks are not retried here.
+# A pull-request run has no candidate tag, so it upgrades into releases/latest
+# and still has to print STORAGE_DURABLE_BEFORE and UPGRADE_DATA_SURVIVED.
 SETUP_STEP_ATTEMPTS = 3
 SETUP_NODE_WAIT_SECONDS = 25
 SETUP_SCROLL_LIMIT = 3
