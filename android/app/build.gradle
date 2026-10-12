@@ -38,8 +38,9 @@ android {
                 storePassword signingPassword
                 keyAlias 'folio'
                 keyPassword signingPassword
-                // v0.2.33 was v2-only. v1 helps OEM package installers that reject v2-only APKs
-                // ("problem parsing the package") while emulators accept them. v3 is the same certificate, no rotation.
+                // v0.2.33 was v2-only. v3 is the same certificate, no rotation.
+                // AGP still omits the JAR (v1) signature when minSdk is 24 or higher.
+                // The release workflow re-signs with apksigner so v1, v2, and v3 are all present.
                 enableV1Signing = true
                 enableV2Signing = true
                 enableV3Signing = true

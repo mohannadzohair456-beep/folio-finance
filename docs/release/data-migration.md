@@ -30,7 +30,9 @@ The published `v0.2.33` APK (54,832 bytes, release asset `app-release.apk`) was 
 
 Emulators accept a v2-only APK. Some OEM package installers still walk the JAR signature and report **problem parsing the package** when v1 is missing. A signature mismatch is a different failure (app not installed / signatures conflict) and happens when a debug or unsigned APK is installed over `com.folio.finance.app`.
 
-This release turns on v1, v2, and v3 together, still with alias `folio` and the pinned certificate `126a716dad1de9968cfb293aa4c7b3b7567d22d1ccc36cdf62f3fdbc3ce7767f`. v3 is the same certificate with no rotation, so it can update the v2-only v0.2.33 build. v4 signing stays off because that scheme is a sidecar file and is not useful for a sideloaded GitHub APK.
+The release is signed with alias `folio` and the pinned certificate `126a716dad1de9968cfb293aa4c7b3b7567d22d1ccc36cdf62f3fdbc3ce7767f`. v3 is the same certificate with no rotation, so it can update the v2-only v0.2.33 build. v4 signing stays off because that scheme is a sidecar file and is not useful for a sideloaded GitHub APK.
+
+AGP 8.7 does not write a JAR (v1) signature when `minSdk` is 24 or higher, even with `enableV1Signing` set. The main workflow re-signs the assembled APK with `apksigner sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --min-sdk-version 23`. That flag only asks for the JAR signature. The manifest `minSdk` stays 26. CI then requires v1, v2, and v3 from `apksigner verify --min-sdk-version 23`, and v2 plus v3 from `--min-sdk-version 26`.
 
 CI runs `apksigner verify --verbose --print-certs`, checks the pinned certificate before and after the build, requires v1, v2, and v3 (`apksigner verify --verbose --min-sdk-version 26`), runs `zipalign -c -v 4` and `zipalign -c -p 4`, and checks that `resources.arsc` is stored rather than deflated. The Gradle build zipaligns before signing. Do not unzip and re-zip the APK after that. Doing so breaks the v2 digest and phones then refuse the file.
 

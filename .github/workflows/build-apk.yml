@@ -92,6 +92,30 @@ jobs:
           FOLIO_VERSION_CODE: ${{ github.run_number }}
           FOLIO_VERSION_NAME: 0.3.${{ github.run_number }}
         run: chmod +x android/gradlew && android/gradlew -p android assembleRelease --no-daemon
+      - name: Re-sign release with v1, v2, and v3
+        if: github.event_name != 'pull_request'
+        env:
+          FOLIO_SIGNING_STORE_FILE: ${{ runner.temp }}/folio-release.p12
+          FOLIO_SIGNING_PASSWORD: ${{ secrets.FOLIO_SIGNING_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          # AGP drops the JAR signature when minSdk is 24 or higher, even with enableV1Signing.
+          # --min-sdk-version 23 only tells apksigner to write v1. The manifest minSdk stays 26.
+          "$TOOLS/apksigner" sign \
+            --ks "$FOLIO_SIGNING_STORE_FILE" \
+            --ks-type PKCS12 \
+            --ks-key-alias folio \
+            --ks-pass "pass:${FOLIO_SIGNING_PASSWORD}" \
+            --key-pass "pass:${FOLIO_SIGNING_PASSWORD}" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --v4-signing-enabled false \
+            --min-sdk-version 23 \
+            "$APK"
       - name: Verify signed APK integrity and compatibility
         if: github.event_name != 'pull_request'
         shell: bash
@@ -104,11 +128,15 @@ jobs:
           "$TOOLS/aapt" dump badging "$APK" | tee /tmp/folio-apk-badging.txt
           "$TOOLS/zipalign" -c -v 4 "$APK"
           "$TOOLS/zipalign" -c -p 4 "$APK"
-          SCHEME=$("$TOOLS/apksigner" verify --verbose --min-sdk-version 26 "$APK")
-          printf '%s\n' "$SCHEME"
-          printf '%s\n' "$SCHEME" | grep -q "Verified using v1 scheme (JAR signing): true"
-          printf '%s\n' "$SCHEME" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
-          printf '%s\n' "$SCHEME" | grep -q "Verified using v3 scheme (APK Signature Scheme v3): true"
+          SCHEME23=$("$TOOLS/apksigner" verify --verbose --min-sdk-version 23 "$APK")
+          SCHEME26=$("$TOOLS/apksigner" verify --verbose --min-sdk-version 26 "$APK")
+          printf '%s\n' "$SCHEME23"
+          printf '%s\n' "$SCHEME26"
+          printf '%s\n' "$SCHEME23" | grep -q "Verified using v1 scheme (JAR signing): true"
+          printf '%s\n' "$SCHEME23" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
+          printf '%s\n' "$SCHEME23" | grep -q "Verified using v3 scheme (APK Signature Scheme v3): true"
+          printf '%s\n' "$SCHEME26" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
+          printf '%s\n' "$SCHEME26" | grep -q "Verified using v3 scheme (APK Signature Scheme v3): true"
           unzip -v "$APK" | awk '/resources\.arsc$/ { if ($0 !~ /Stored/) { print "resources.arsc must be stored uncompressed"; exit 1 } }'
           sha256sum "$APK"
           unzip -t "$APK" | tail -n 2
