@@ -494,11 +494,37 @@ class Driver:
                 self.swipe_up()
         return False
 
+    def keyboard_shown(self):
+        result = self.shell("dumpsys input_method", check=False, timeout=25)
+        return "mInputShown=true" in (result.stdout or "")
+
+    def blur_inputs(self):
+        """Tap the wordmark band so the focused editor releases the keyboard.
+
+        Re-enabling the IME while the balance field stays focused opens the
+        number pad again, and the next tap inserts a digit into that field.
+        """
+        # Inputs start at x=42. The left gutter is not a field, even when the
+        # number pad has scrolled the form.
+        x = 8
+        y = int(self.height * 0.4)
+        print(f"blur tap {x},{y}", flush=True)
+        self.shell(f"input tap {x} {y}")
+        time.sleep(0.4)
+
     def hide_keyboard(self):
         # MainActivity treats Back as "go to the overview", so Back must not
         # be used to dismiss the keyboard.
-        result = self.shell("dumpsys input_method", check=False, timeout=25)
-        if "mInputShown=true" not in (result.stdout or ""):
+        if not self.keyboard_shown():
+            return
+        self.blur_inputs()
+        deadline = time.time() + 3
+        while time.time() < deadline and self.keyboard_shown():
+            time.sleep(0.3)
+        if not self.keyboard_shown():
+            # 100dvh on API 35 keeps the footer in the gesture strip until the
+            # viewport settles after the keyboard closes.
+            time.sleep(0.4)
             return
         ime = self.shell("settings get secure default_input_method", check=False)
         ident = (ime.stdout or "").strip()
@@ -508,10 +534,9 @@ class Driver:
         print("hiding keyboard", ident, flush=True)
         self.shell("ime disable " + ident, check=False)
         time.sleep(0.4)
+        self.blur_inputs()
         self.shell("ime enable " + ident, check=False)
-        # 100dvh on API 35 keeps the footer in the gesture strip until the
-        # viewport settles after the keyboard closes.
-        time.sleep(0.6)
+        time.sleep(0.5)
 
     def wait_for(self, needle, timeout=45, forbid=()):
         deadline = time.time() + timeout
@@ -548,11 +573,23 @@ class Driver:
         edits.sort(key=lambda node: (node["y1"], node["x1"]))
         return edits
 
-    def focus_field(self, label):
-        # Drop the keyboard first. On API 35 the number pad covers the lower
-        # fields, and a tap there inserts a digit into the field that is
-        # already focused.
-        self.hide_keyboard()
+    def focused_edit(self):
+        nodes = self.dump_nodes()
+        focused = [
+            node for node in nodes
+            if node.get("focused") and node["class"].endswith("EditText")
+        ]
+        return focused[0] if focused else None
+
+    def focus_matches(self, label):
+        focused = self.focused_edit()
+        if not focused:
+            print("no focused edit", label, flush=True)
+            return False
+        print("focused", focused["text"], flush=True)
+        return label.lower() in focused["text"].lower()
+
+    def tap_field(self, label):
         nodes = self.look(label)
         found = [node for node in self.candidates(nodes, label) if self.visible(node)]
         if not found:
@@ -577,16 +614,30 @@ class Driver:
         self.shell(f"input tap {label_node['cx']} {below}")
         time.sleep(0.5)
 
+    def focus_field(self, label):
+        # Drop the keyboard before the tap. On API 35 the number pad covers
+        # the lower fields, and a tap there inserts a digit into the field
+        # that is already focused. Do not type until that field is this one.
+        self.hide_keyboard()
+        if self.focus_matches(label):
+            return
+        self.tap_field(label)
+        if self.focus_matches(label):
+            return
+        print("tab to", label, flush=True)
+        for _ in range(5):
+            self.shell("input keyevent 61")
+            time.sleep(0.35)
+            if self.focus_matches(label):
+                return
+        raise DriveError("could not focus field " + label)
+
     def focused_field_ok(self, value):
-        nodes = self.dump_nodes()
-        focused = [
-            node for node in nodes
-            if node.get("focused") and node["class"].endswith("EditText")
-        ]
+        focused = self.focused_edit()
         if not focused:
             print("field value not exposed", value, flush=True)
             return True
-        text = focused[0]["text"]
+        text = focused["text"]
         print("focused field", text, flush=True)
         return field_holds(text, value)
 
@@ -596,17 +647,23 @@ class Driver:
         time.sleep(0.2)
 
     def fill_labeled(self, label, value, numeric=False):
+        if not numeric:
+            self.hide_keyboard()
+            self.tap_field(label)
+            self.type_text(value)
+            return
         for attempt in range(2):
             self.focus_field(label)
-            if numeric:
-                self.type_number(value)
-                if self.focused_field_ok(value):
-                    return
-                print("retry field", label, attempt, flush=True)
+            self.type_number(value)
+            if self.focus_matches(label) and self.focused_field_ok(value):
+                return
+            print("retry field", label, attempt, flush=True)
+            # A miss can leave the previous field focused. Deleting there
+            # would wipe the balance that was just entered.
+            if self.focus_matches(label):
                 self.clear_focused_number()
             else:
-                self.type_text(value)
-                return
+                print("refusing to clear a different field", flush=True)
         raise DriveError("could not enter " + label)
 
     def require(self, blob, needles, where):
