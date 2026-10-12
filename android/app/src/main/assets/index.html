@@ -4408,6 +4408,7 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
     'no-amount': ['Folio couldn\'t read an amount in that line. Nothing was saved.', 'مش قادر أقرأ مبلغ في السطر ده. مفيش حاجة اتسجلت.'],
     'many-amounts': ['That line has more than one amount, so Folio didn\'t guess. Nothing was saved.', 'السطر فيه أكتر من مبلغ، فمش هخمّن. مفيش حاجة اتسجلت.'],
     'bad-decimals': ['That amount has more than two decimal places. Folio won\'t round it. Nothing was saved.', 'المبلغ فيه أكتر من رقمين بعد العلامة. مش هقرّبه. مفيش حاجة اتسجلت.'],
+    'ambiguous-dot': ['That dot could be decimals or a thousands separator, so Folio didn\'t guess. Nothing was saved.', 'النقطة دي ممكن تكون قروش أو آلاف، فمش هخمّن. مفيش حاجة اتسجلت.'],
     'bad-grouping': ['Folio couldn\'t read that number. Nothing was saved.', 'مش قادر أقرأ الرقم ده. مفيش حاجة اتسجلت.'],
     zero: ['The amount has to be more than zero. Nothing was saved.', 'المبلغ لازم يبقى أكبر من صفر. مفيش حاجة اتسجلت.'],
     'too-large': ['That amount is too large to store. Nothing was saved.', 'المبلغ أكبر من اللي نقدر نسجله. مفيش حاجة اتسجلت.'],
@@ -4459,9 +4460,12 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
     estalamt: { keep: 0, category: null },
     estalmt: { keep: 0, category: null },
     'استلمت': { keep: 0, category: null },
-    'قبضت': { keep: 0, category: null },
+    'قبضت': { keep: 1, category: 'Salary' },
     'جالي': { keep: 0, category: null },
-    'جالى': { keep: 0, category: null }
+    'جالى': { keep: 0, category: null },
+    'اتحوللي': { keep: 0, category: 'Transfers' },
+    'اتحولي': { keep: 0, category: 'Transfers' },
+    'وصلني': { keep: 0, category: 'Other income' }
   };
 
   var EXPENSE = {
@@ -4576,6 +4580,7 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
     if (intPart === '') intPart = '0';
     if (!/^\d+$/.test(intPart)) return { type: 'broken', reason: 'bad-grouping' };
     if (frac && !/^\d+$/.test(frac)) return { type: 'broken', reason: 'bad-grouping' };
+    if (frac.length === 3) return { type: 'broken', reason: 'ambiguous-dot' };
     if (frac.length > 2 && !/^0+$/.test(frac.slice(2))) return { type: 'broken', reason: 'bad-decimals' };
     if (intPart.length > 12) return { type: 'broken', reason: 'too-large' };
     var cents = (frac + '00').slice(0, 2);

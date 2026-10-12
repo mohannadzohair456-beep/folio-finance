@@ -55,7 +55,13 @@ const drafts = [
   ['استلمت 3000 مرتب', { amountMinor: 300000, direction: 'income', category: 'Salary', merchant: 'مرتب' }],
   ['200 ج.م عشا', { amountMinor: 20000, direction: 'expense', category: 'Food & drinks', merchant: 'عشا' }],
   ['I spent 18.00 on breakfast', { amountMinor: 1800, direction: 'expense', category: 'Food & drinks', merchant: 'breakfast' }],
-  ['1.230 lunch', { amountMinor: 123, direction: 'expense', category: 'Food & drinks', merchant: 'lunch' }],
+  ['1.50 rent', { amountMinor: 150, direction: 'expense', category: 'Housing', merchant: 'rent' }],
+  ['1,500 rent', { amountMinor: 150000, direction: 'expense', category: 'Housing', merchant: 'rent' }],
+  ['اتحوللي 300 من احمد', { amountMinor: 30000, direction: 'income', category: 'Transfers', merchant: 'احمد' }],
+  ['اتحولي 300 من احمد', { amountMinor: 30000, direction: 'income', category: 'Transfers', merchant: 'احمد' }],
+  ['وصلني 300 من احمد', { amountMinor: 30000, direction: 'income', category: 'Other income', merchant: 'احمد' }],
+  ['جالي 300 من احمد', { amountMinor: 30000, direction: 'income', category: 'Other income', merchant: 'احمد' }],
+  ['قبضت 8000', { amountMinor: 800000, direction: 'income', category: 'Salary', merchant: 'قبضت' }],
   ['+5,000.50 salary', { amountMinor: 500050, direction: 'income', category: 'Salary', merchant: 'salary' }],
   ['  150   lunch  ', { amountMinor: 15000, direction: 'expense', category: 'Food & drinks', merchant: 'lunch' }],
   ['Dafa3t 75 Uber', { amountMinor: 7500, direction: 'expense', category: 'Transport', merchant: 'Uber' }],
@@ -99,7 +105,11 @@ const failures = [
   ['+5000', 'no-label'],
   ['دفعت 200', 'no-label'],
   ['10 and 20 lunch', 'many-amounts'],
-  ['12.345 lunch', 'bad-decimals'],
+  ['12.345 lunch', 'ambiguous-dot'],
+  ['1.500 rent', 'ambiguous-dot'],
+  ['1.230 lunch', 'ambiguous-dot'],
+  ['1.2345 lunch', 'bad-decimals'],
+  ['حولت 100', 'transfer'],
   ['1,50 lunch', 'bad-grouping'],
   ['5k lunch', 'bad-grouping'],
   ['0 lunch', 'zero'],
@@ -159,6 +169,17 @@ assert.equal(quick.confirmQuickEntry(untouched.draft, {
   merchant: 'x',
   occurredAt: 1
 }).ok, false);
+const ambiguousConfirm = quick.confirmQuickEntry(untouched.draft, {
+  amountText: '1.500',
+  direction: 'expense',
+  category: 'Housing',
+  merchant: 'rent',
+  occurredAt: 1
+});
+assert.equal(ambiguousConfirm.ok, false);
+assert.equal(ambiguousConfirm.saved, false);
+assert.equal(ambiguousConfirm.code, 'ambiguous-dot');
+assert.equal(ledger.length, 1, 'an ambiguous confirm amount is not saved');
 assert.equal(quick.confirmQuickEntry(untouched.draft, {
   amountText: '10',
   direction: 'sideways',
