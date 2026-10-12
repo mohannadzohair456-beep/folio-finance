@@ -510,4 +510,165 @@ assert.equal(notesRoundTrip.reportedBalanceMinor, 1000);
 assert.equal(notesRoundTrip.balanceObservations.length, 30);
 assert.equal(notesRoundTrip.balanceObservations[notesRoundTrip.balanceObservations.length - 1].amountMinor, 1039);
 
+const historical = JSON.parse(fs.readFileSync('tests/fixtures/historical-ledger-2026-10-12.json', 'utf8'));
+function booksOf(state) {
+  const totals = FolioData.summarize(state.transactions, 'EGP');
+  const sar = FolioData.summarize(state.transactions, 'SAR');
+  const carrefour = state.transactions.find(row => row.id === 'carrefour-2026-10-11');
+  const salary = state.transactions.find(row => row.id === 'salary-2026-10');
+  const card = state.accounts.find(row => row.id === 'card');
+  return {
+    balance: state.reportedBalanceMinor,
+    balanceAt: state.balanceReportedAt,
+    income: totals.income,
+    expenseEgp: totals.expense,
+    expenseSar: sar.expense,
+    foodBudget: state.budgets.EGP['Food & drinks'],
+    sarBudget: state.budgets.SAR.Shopping,
+    carrefourMinor: carrefour.amountMinor,
+    carrefourCurrency: carrefour.currency,
+    carrefourDirection: carrefour.direction,
+    salaryMinor: salary.amountMinor,
+    salaryMerchant: salary.merchant,
+    cardBalance: card.balanceMinor,
+    schema: state.schemaVersion
+  };
+}
+const historicalOnce = FolioData.restoreBackup(JSON.stringify(FolioData.buildBackup(historical)));
+const historicalMeaning = {
+  balance: 842050,
+  balanceAt: 1759900000000,
+  income: 1850000,
+  expenseEgp: 12550,
+  expenseSar: 8650,
+  foodBudget: 350000,
+  sarBudget: 8000,
+  carrefourMinor: 12550,
+  carrefourCurrency: 'EGP',
+  carrefourDirection: 'expense',
+  salaryMinor: 1850000,
+  salaryMerchant: 'راتب',
+  cardBalance: -15000,
+  schema: 2
+};
+same(booksOf(historicalOnce), historicalMeaning, 'export then import keeps historical balances and expenses');
+const historicalTwice = FolioData.restoreBackup(JSON.stringify(FolioData.buildBackup(historicalOnce)));
+same(booksOf(historicalTwice), historicalMeaning, 'a second round trip does not rescale minor units');
+
+const schema0 = {
+  currency: 'EGP',
+  transactions: [
+    { id: 'carrefour-2026-10-11', amountMinor: 12550, currency: 'EGP', direction: 'expense', merchant: 'Carrefour', category: 'Food & drinks', occurredAt: 1760213700000, source: 'manual' },
+    { id: 'salary-2026-10', amountMinor: 1850000, currency: 'EGP', direction: 'income', merchant: 'راتب', category: 'Salary', occurredAt: 1759900000000, source: 'manual' }
+  ],
+  budgets: { EGP: { 'Food & drinks': 3500 } },
+  reportedBalanceMinor: 842050,
+  balanceReportedAt: 1759900000000,
+  monthlyIncomeMinor: 1850000
+};
+const fromOldFile = FolioData.restoreBackup(JSON.stringify(schema0));
+assert.equal(fromOldFile.budgets.EGP['Food & drinks'], 350000, 'a schema 0 budget is converted once');
+assert.equal(fromOldFile.reportedBalanceMinor, 842050, 'a schema 0 balance was already minor units');
+assert.equal(fromOldFile.transactions.find(row => row.id === 'carrefour-2026-10-11').amountMinor, 12550);
+const fromOldAgain = FolioData.restoreBackup(JSON.stringify(FolioData.buildBackup(fromOldFile)));
+assert.equal(fromOldAgain.budgets.EGP['Food & drinks'], 350000, 'export of the migrated file does not convert the budget again');
+assert.equal(fromOldAgain.reportedBalanceMinor, 842050);
+assert.equal(fromOldAgain.transactions.find(row => row.id === 'carrefour-2026-10-11').amountMinor, 12550);
+
+function rejectRestore(file, pattern) {
+  assert.throws(() => FolioData.restoreBackup(typeof file === 'string' ? file : JSON.stringify(file)), pattern);
+}
+rejectRestore('{', /valid JSON/);
+rejectRestore('not json', /Import CSV/);
+rejectRestore({ folioBackup: 1, schemaVersion: 2, currency: 'EGP', budgets: {} }, /transactions list/);
+rejectRestore({ schemaVersion: 3, currency: 'EGP', transactions: [], budgets: {} }, /schema version/);
+rejectRestore({ schemaVersion: 1.5, currency: 'EGP', transactions: [], budgets: {} }, /schema version/);
+rejectRestore({ schemaVersion: true, currency: 'EGP', transactions: [], budgets: {} }, /schema version/);
+rejectRestore({ schemaVersion: 'future', currency: 'EGP', transactions: [], budgets: {} }, /schema version/);
+rejectRestore('x'.repeat(2000001), /2 MB/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [
+    { id: 'a', amountMinor: 100, currency: 'EGP', direction: 'expense' },
+    { id: 'a', amountMinor: 200, currency: 'EGP', direction: 'expense' }
+  ],
+  budgets: {}
+}, /duplicate transaction id/);
+const keptIncomplete = FolioData.restoreBackup(JSON.stringify({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [{ id: 'odd', merchant: 'No amount' }, null],
+  budgets: {},
+  reportedBalanceMinor: 842050
+}));
+assert.equal(keptIncomplete.transactions.length, 2, 'a missing amount is kept and does not replace the balance');
+assert.equal(keptIncomplete.reportedBalanceMinor, 842050);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [{ id: 'float', amountMinor: 12.5, currency: 'EGP', direction: 'expense' }],
+  reportedBalanceMinor: 842050,
+  budgets: {}
+}, /minor units/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [{ id: 'nan', amountMinor: 'NaN', currency: 'EGP', direction: 'expense' }],
+  budgets: {}
+}, /minor units/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [{ id: 'neg', amountMinor: -100, currency: 'EGP', direction: 'expense' }],
+  budgets: {}
+}, /cannot be negative/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [],
+  reportedBalanceMinor: 12.5,
+  budgets: {}
+}, /Reported balance/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'JPY',
+  transactions: [],
+  budgets: {}
+}, /Unsupported currency/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [{ id: 'bad-ccy', amountMinor: 100, currency: 'XXX', direction: 'expense' }],
+  budgets: {}
+}, /Unsupported currency/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [],
+  budgets: { EGP: { Food: 10 }, egp: { Food: 20 } }
+}, /repeats a category budget/);
+rejectRestore({
+  schemaVersion: 2,
+  currency: 'EGP',
+  transactions: [],
+  budgets: { EGP: { Food: 10.5 } }
+}, /Category budget/);
+const integerString = FolioData.restoreBackup(JSON.stringify({
+  schemaVersion: 2,
+  currency: 'egp',
+  transactions: [{ id: 's', amountMinor: '12550', currency: 'EGP', direction: 'expense', merchant: 'Carrefour', category: 'Food & drinks', occurredAt: 10 }],
+  budgets: { EGP: { Food: 350000 } },
+  reportedBalanceMinor: 842050
+}));
+assert.equal(integerString.currency, 'EGP');
+assert.equal(integerString.transactions[0].amountMinor, 12550);
+assert.equal(integerString.reportedBalanceMinor, 842050);
+assert.equal(integerString.budgets.EGP.Food, 350000);
+const hostileProto = '{"schemaVersion":2,"currency":"EGP","transactions":[{"id":"p","amountMinor":100,"currency":"EGP","direction":"expense","__proto__":{"admin":true}}],"budgets":{}}';
+const openedHostile = FolioData.migrate(JSON.parse(hostileProto), null);
+assert.equal(openedHostile.state.transactions[0].admin, undefined, 'a stored row does not inherit a backup prototype');
+assert.equal(Object.prototype.admin, undefined);
+rejectRestore(hostileProto, /forbidden field/);
+
 console.log('PASS money, migration, backup and legacy CSV checks');
