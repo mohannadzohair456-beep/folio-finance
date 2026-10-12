@@ -49,12 +49,7 @@ jobs:
           ram-size: 2048
           disable-animations: true
           emulator-boot-timeout: 720
-          script: |
-            set -euo pipefail
-            python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" upgrade \
-              --old /tmp/folio-v0233.apk \
-              --new /tmp/folio-current.apk \
-              --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/upgrade-api34"
+          script: python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" upgrade --old /tmp/folio-v0233.apk --new /tmp/folio-current.apk --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/upgrade-api34"
       - name: Upload upgrade screenshots and UI dumps
         if: always()
         uses: actions/upload-artifact@v4
@@ -97,11 +92,7 @@ jobs:
           ram-size: 2048
           disable-animations: true
           emulator-boot-timeout: 900
-          script: |
-            set -euo pipefail
-            python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" launch \
-              --apk /tmp/folio-current.apk \
-              --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/launch-api${{ matrix.api }}"
+          script: python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" launch --apk /tmp/folio-current.apk --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/launch-api${{ matrix.api }}"
       - name: Upload launch screenshots
         if: always()
         uses: actions/upload-artifact@v4
