@@ -52,10 +52,24 @@ Later main builds publish as prereleases and do not replace `releases/latest`. T
 
 Ask Folio no longer opens an affordability reply with Yes or No, and it no longer calls a locally reconciled figure a verified balance. A purchase is described as an estimated remaining amount from data the user entered, with an explicit line that the estimate is not approval and not a guarantee. Month-end projection says planned income is not money available now. A question in Arabic script, or in common Arabizi such as `a2dar ashtary`, is answered in Egyptian Arabic with Western digits. English questions stay in English. The numbers and the refusal to mix currencies are unchanged.
 
+## FOL-108 — v0.2.33 on Android 8 does not render (12 Oct 2026)
+
+GitHub run [38248427070](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38248427070) on `44a095c`, job `upgrade-from-v0233 (26)`.
+
+v0.2.33 installed. `adb install` succeeded, versionName 0.2.33, versionCode 33. The process launched. After about 50 seconds the accessibility tree still had only the document title `Folio — Personal Finance` and empty `root`, `modal-root`, and `toast-region` nodes. There was no "Meet Folio". The screenshot is a blank white page under the status bar. No transactions were entered and no upgrade was installed, so this is not a data-loss result.
+
+The `google_apis` API 26 image's WebView is Chrome 69.0.3497.100 (`com.android.chrome`). The v0.2.33 `assets/index.html` inline script uses `??` (nullish coalescing) and `?.` (optional chaining). Chrome 69 cannot parse either, so that script does not run and `render()` is never called. The same image does render v0.3.43: `clean-launch (26)` and `cold-launch-latency (26)` in that run passed. App source was not changed for this.
+
+API 34 in the same run completed `UPGRADE_DATA_SURVIVED`. API 35 filled 8420.50, 15000, and 9000, then the Continue button was clipped at y=1897 on a 1920px screen and the tap missed. That is a driver miss, not a missing field. The driver now treats a hit point in the bottom 140px as a miss and nudges the page up before tapping. A green `v0233-page-on-api26` job prints `V0233_UI_BLANK` and is not a data-survival pass.
+
+Cold-start TotalTime for signed v0.3.43 is recorded by `cold-launch-latency` on API 26, 34, and 35. No latency number from run 38248427070 is copied forward, because that run's API 34 and API 35 samples were not accepted by the older parser.
+
+Run [38255733542](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38255733542) on head `a981ac3` (checkout merge `61b8b289`) is the baseline. `latency.txt` TotalTime medians for v0.3.43 are 923 ms on API 26, 1455 ms on API 34, and 2188 ms on API 35. API 34's content poll printed `LATENCY_WEBVIEW_CONTENT_FAILED` and has no content time. `v0233-page-on-api26` printed `V0233_UI_BLANK 0.2.33 33 sdk 26`. `upgrade-from-v0233` on API 34 and API 35 printed `UPGRADE_DATA_SURVIVED 0.3.61 161`. `clean-launch` on API 26 and API 35 printed `LAUNCH_OK 0.3.61 161`. The figures and the runner image `ubuntu24` `20261004.327.1` are in `docs/operations/performance-baseline.md`. A green API 26 blank job is not a data-survival pass.
+
 ## Not done
 
 These three bullets described the tree at `f422d13`. The task board's 12 Oct 2026 baseline later records a signed v0.3.43 release. They are not the status of the payday runway change above.
 
-- No emulator install of v0.2.33, no data entry on a device, and no upgrade to this build. This environment has no Android SDK image and no release keystore. Details are in `docs/release/data-migration.md` and `docs/testing/test-results.md`.
+- The first investigation did not install v0.2.33. The FOL-108 section above is the later emulator result: v0.2.33 installs on API 26 and its page stays blank. Data entry and the in-place upgrade were not run on that API.
 - The signed release APK is produced on the main CI workflow, which has the keystore secrets. Pull request CI compiled an unsigned release and passed the unit tests. `apksigner verify` for v1, v2, and v3 did not run on that pull request.
 - Headless Chrome opened the bundled page: onboarding rendered, EGP and SAR stayed separate, budgets displayed as major currency from minor units, and JSON backup restored the workspace. There was still no emulator upgrade.

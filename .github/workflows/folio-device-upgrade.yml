@@ -7,14 +7,26 @@ on:
         description: Tag to test, such as v0.3.50. Empty tests releases/latest and does not change which release is latest.
         required: false
         type: string
+  pull_request:
+    paths:
+      - '.github/workflows/folio-device-upgrade.yml'
+      - '.github/scripts/folio_device_drive.py'
+      - 'docs/operations/performance-baseline.md'
   push:
     branches: [main]
     paths:
       - '.github/workflows/folio-device-upgrade.yml'
       - '.github/scripts/folio_device_drive.py'
+      - 'docs/operations/performance-baseline.md'
   workflow_run:
     workflows: ["Build Folio APK"]
     types: [completed]
+
+# Pull requests may push again while a matrix is running. A main promotion
+# must not be cancelled by that.
+concurrency:
+  group: folio-device-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -25,10 +37,28 @@ env:
   CANDIDATE_TAG: ${{ (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && format('v0.3.{0}', github.event.workflow_run.run_number)) || github.event.inputs.candidate_tag || '' }}
 
 jobs:
+  script-self-check:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the UI driver
+        uses: actions/checkout@v4
+      - name: Check latency parsing without a device
+        run: python3 .github/scripts/folio_device_drive.py self-check
+
   upgrade-from-v0233:
+    needs: script-self-check
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # API 26 boots, but v0.2.33's page does not render on that image's
+        # Chrome 69 WebView, so the UI cannot enter data there. See v0233-page-on-api26.
+        # A green v0233-page-on-api26 job is not a data-survival pass.
+        api: [34, 35]
     steps:
       - name: Checkout the UI driver
         uses: actions/checkout@v4
@@ -44,6 +74,7 @@ jobs:
           fi
           echo "Candidate APK: ${candidate_url}"
           curl -fL --retry 3 --output /tmp/folio-current.apk "$candidate_url"
+          echo "afe748d0c151bfb6905c26c7c0cc7a7f5692be1871f29c2090cac6b111687809  /tmp/folio-v0233.apk" | sha256sum --check
           python3 -c 'import pathlib,sys
           for path in sys.argv[1:]:
               data=pathlib.Path(path).read_bytes()
@@ -54,23 +85,113 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
       - name: Prepare KVM
         run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
-      - name: Enter data on v0.2.33, upgrade in place, read it back
+      - name: Enter data on v0.2.33, upgrade in place, read it back on API ${{ matrix.api }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: ${{ matrix.api }}
           target: google_apis
           arch: x86_64
           profile: pixel_2
           ram-size: 2048
           disable-animations: true
-          emulator-boot-timeout: 720
-          script: python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" upgrade --old /tmp/folio-v0233.apk --new /tmp/folio-current.apk --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/upgrade-api34"
+          emulator-options: "-no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim"
+          emulator-boot-timeout: 900
+          script: python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" upgrade --old /tmp/folio-v0233.apk --new /tmp/folio-current.apk --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/upgrade-api${{ matrix.api }}"
       - name: Upload upgrade screenshots and UI dumps
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: folio-upgrade-api34
-          path: emulator-artifacts/upgrade-api34
+          name: folio-upgrade-api${{ matrix.api }}
+          path: emulator-artifacts/upgrade-api${{ matrix.api }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  v0233-page-on-api26:
+    needs: script-self-check
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the UI driver
+        uses: actions/checkout@v4
+      - name: Download v0.2.33
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --output /tmp/folio-v0233.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/download/v0.2.33/app-release.apk
+          echo "afe748d0c151bfb6905c26c7c0cc7a7f5692be1871f29c2090cac6b111687809  /tmp/folio-v0233.apk" | sha256sum --check
+      - name: Prepare KVM
+        run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Record that v0.2.33 does not render on Android 8
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 26
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048
+          disable-animations: true
+          emulator-options: "-no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim"
+          emulator-boot-timeout: 900
+          script: python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" blank-check --apk /tmp/folio-v0233.apk --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/v0233-api26"
+      - name: Upload the blank-page evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-v0233-api26
+          path: emulator-artifacts/v0233-api26
+          if-no-files-found: warn
+          retention-days: 14
+
+  cold-launch-latency:
+    needs: script-self-check
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [26, 34, 35]
+    steps:
+      - name: Checkout the UI driver
+        uses: actions/checkout@v4
+      - name: Download signed v0.3.43
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --output /tmp/folio-v0343.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/download/v0.3.43/app-release.apk
+          echo "726cd2f38f4c18aeb1f1f861dd3ad60e287c952a6d9093b170d56b08fa070eb2  /tmp/folio-v0343.apk" | sha256sum --check
+          python3 -c 'import pathlib,sys; data=pathlib.Path(sys.argv[1]).read_bytes();
+          assert data[:4]==b"PK\x03\x04", "not an apk"; print(len(data))' /tmp/folio-v0343.apk
+      - name: Prepare KVM
+        run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Cold-start latency on API ${{ matrix.api }}
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          FOLIO_EMULATOR_API: ${{ matrix.api }}
+          FOLIO_EMULATOR_TARGET: google_apis
+          FOLIO_EMULATOR_ARCH: x86_64
+          FOLIO_EMULATOR_PROFILE: pixel_2
+          FOLIO_EMULATOR_RAM: "2048"
+          FOLIO_EMULATOR_OPTIONS: "-no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim"
+          FOLIO_EMULATOR_ACTION: reactivecircus/android-emulator-runner@v2
+          FOLIO_DISABLE_ANIMATIONS: "true"
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048
+          disable-animations: true
+          emulator-options: "-no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim"
+          emulator-boot-timeout: 900
+          script: python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" latency --apk /tmp/folio-v0343.apk --runs 7 --content-runs 5 --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/latency-api${{ matrix.api }}"
+      - name: Upload latency samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-latency-api${{ matrix.api }}
+          path: emulator-artifacts/latency-api${{ matrix.api }}
           if-no-files-found: warn
           retention-days: 14
 
@@ -78,6 +199,7 @@ jobs:
     # Only a main push build has a prerelease tag to install. A pull-request
     # build does not publish, and a push of this file alone still has the
     # previous promoted release as latest.
+    needs: script-self-check
     if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_tag != '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -134,6 +256,7 @@ jobs:
           retention-days: 14
 
   clean-launch:
+    needs: script-self-check
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -181,8 +304,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # Promotion waits on the two upgrade paths only. A clean-launch failure
-  # does not move releases/latest. These jobs do not touch signing.
+  # Promotion waits on the two upgrade paths only. A clean-launch failure,
+  # a blank API 26 page, or a latency miss does not move releases/latest.
+  # These jobs do not touch signing. The API 26 blank job is not a data pass.
   promote-release:
     needs: [upgrade-from-v0233, upgrade-from-schema1]
     if: ${{ success() && needs.upgrade-from-v0233.result == 'success' && needs.upgrade-from-schema1.result == 'success' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_tag != '')) }}
