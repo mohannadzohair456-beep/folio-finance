@@ -68,9 +68,13 @@ Cold-start TotalTime for signed v0.3.43 is recorded by `cold-launch-latency` on 
 
 Run [38255733542](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38255733542) on head `a981ac3` (checkout merge `61b8b289`) is the baseline. `latency.txt` TotalTime medians for v0.3.43 are 923 ms on API 26, 1455 ms on API 34, and 2188 ms on API 35. API 34's content poll printed `LATENCY_WEBVIEW_CONTENT_FAILED` and has no content time. `v0233-page-on-api26` printed `V0233_UI_BLANK 0.2.33 33 sdk 26`. `upgrade-from-v0233` on API 34 and API 35 printed `UPGRADE_DATA_SURVIVED 0.3.61 161`. `clean-launch` on API 26 and API 35 printed `LAUNCH_OK 0.3.61 161`. The figures and the runner image `ubuntu24` `20261004.327.1` are in `docs/operations/performance-baseline.md`. A green API 26 blank job is not a data-survival pass.
 
-## Update — 12 Oct 2026, balance freshness
+## Update — 12 Oct 2026, balance freshness (H2)
 
-Each account can store a user-confirmed `balanceMinor`, `asOf`, currency, and an untracked flag. The page says whether that balance is current, stale (older than 7 days), or unknown, and it says when a later notification was not folded into the figure. Notification rows do not change the entered balance, and a CSV import does not create account balances. Schema stays 2.
+Merged to main as `e071dc32ef2386fffc3f7829b658a684bf532e46` (https://github.com/mohannadzohair456-beep/folio-finance/pull/17, squash of `9f06f13`). This is the H2 trustworthiness slice: a figure the user typed is labeled as an entered balance, not a bank balance.
+
+Optional `accounts` stay on schema 2. Each account stores `balanceMinor`, `asOf`, currency, type, and `untracked`. Freshness is `fresh` within 7 days, `stale` after that, and `unknown` when the amount or the time is missing. A notification after the confirmed time is an untracked movement. It does not change `balanceMinor` or `reportedBalanceMinor`. Provenance stored from a notification is kept as `manual`. Account names go through `escapeNote`. A CSV import still adds transactions only. Signing and `applicationId` `com.folio.finance.app` are unchanged.
+
+Local node suites passed on `9f06f13` before the merge: Chrome 69 syntax, money flow, interface, onboarding and assistant, money, Ask Folio, and payday runway. Pull-request android CI succeeded: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38259106854. The signed main build is https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38260492478. That workflow publishes a prerelease (`v0.3.66` when run 66 finishes) and does not replace `releases/latest`. The device upgrade had not finished when this note was written. Promotion is not claimed. `releases/latest` stays on v0.3.63 until both `upgrade-from-v0233` (API 34 and API 35) and `upgrade-from-schema1` succeed. A known driver flake on the old v0.2.33 balance step is owned by a separate `.github` change and is not part of this merge.
 
 ## Not done
 
