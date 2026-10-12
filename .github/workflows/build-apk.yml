@@ -56,6 +56,8 @@ jobs:
         run: node tests/money.test.cjs
       - name: Test Ask Folio assistant engine
         run: node tests/assistant.test.cjs
+      - name: Test payday runway
+        run: node tests/payday-runway.test.cjs
       - name: Compile release without signing secrets
         if: github.event_name == 'pull_request'
         run: chmod +x android/gradlew && android/gradlew -p android assembleRelease --no-daemon
