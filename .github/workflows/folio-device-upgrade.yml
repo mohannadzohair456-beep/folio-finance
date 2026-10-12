@@ -334,9 +334,13 @@ jobs:
             exit 1
           fi
 
+  # always() is required. failure() stays false when one needed job is
+  # skipped, so a failed v0.2.33 matrix used to skip this job whenever
+  # upgrade-from-schema1 was skipped (no candidate tag on a workflow_run
+  # that was not a main push). Promote stays on success() of both paths.
   withhold-latest-on-failure:
     needs: [upgrade-from-v0233, upgrade-from-schema1]
-    if: ${{ failure() && (needs.upgrade-from-v0233.result == 'failure' || needs.upgrade-from-schema1.result == 'failure') && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_tag != '')) }}
+    if: ${{ always() && (needs.upgrade-from-v0233.result == 'failure' || needs.upgrade-from-schema1.result == 'failure') && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_tag != '')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

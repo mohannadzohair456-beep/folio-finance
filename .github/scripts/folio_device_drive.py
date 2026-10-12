@@ -34,6 +34,111 @@ def is_control_label(text, needle):
     return normalized_label(text) == normalized_label(needle)
 
 
+DIALOG_TITLES = (
+    "new transaction",
+    "edit transaction",
+    "set monthly budget",
+    "edit budget",
+)
+
+
+def choose_blur_node(nodes, height, width):
+    """Pick a non-input to tap so the keyboard closes.
+
+    A dialog title wins over the folio wordmark. The wordmark stays in the
+    tree above the sheet, and tapping it hits the overlay and closes the form.
+    Returns None when a Close control is up but the title is not visible;
+    the caller then taps inside the sheet instead of the wordmark.
+    """
+    titles = []
+    marks = []
+    dialog = False
+    for node in nodes:
+        text = node.get("text") or ""
+        if node["x2"] - node["x1"] < 24 or node["y2"] - node["y1"] < 24:
+            continue
+        if not (0 <= node["cx"] <= width and 0 <= node["cy"] <= height):
+            continue
+        label = normalized_label(text)
+        if is_control_label(text, "Close"):
+            dialog = True
+        if any(wanted in label for wanted in DIALOG_TITLES):
+            titles.append(node)
+            dialog = True
+        elif is_blur_target(text) and not node["class"].endswith("EditText") and not node["class"].endswith("Button"):
+            marks.append(node)
+    if titles:
+        titles.sort(key=lambda node: node["cy"])
+        return titles[0]
+    if dialog:
+        return None
+    if marks:
+        marks.sort(key=lambda node: node["cy"])
+        return marks[0]
+    return None
+
+
+def is_blur_target(text):
+    """A non-input label that releases focus without closing a dialog.
+
+    The left screen edge is the modal overlay. Tapping it dismisses
+    New transaction. The wordmark and the dialog title sit inside the page.
+    """
+    raw = " ".join(str(text).split()).lower()
+    if raw in {"◈ folio.", "folio.", "folio"} or raw.startswith("◈ folio"):
+        return True
+    label = normalized_label(text)
+    for wanted in (
+        "make it yours",
+        "new transaction",
+        "edit transaction",
+        "set monthly budget",
+        "edit budget",
+        "your financial starting point",
+    ):
+        if wanted in label:
+            return True
+    return False
+
+
+def field_holds(text, value):
+    """True when an EditText shows value, or does not expose a number.
+
+    WebView accessibility text is often "8420.50, Current available balance".
+    A longer digit run means later keystrokes landed in the same field, which
+    is what API 35 did when the keyboard covered the next rows.
+    """
+    cleaned = " ".join(str(text).split())
+    match = re.search(r"\d[\d,]*\.?\d*", cleaned)
+    if not match:
+        return True
+    shown = match.group(0).replace(",", "")
+    try:
+        return abs(float(shown) - float(value)) <= 1e-6
+    except ValueError:
+        return False
+
+
+def tap_point(node, height, safe_margin=140, gesture_margin=72):
+    """Screen point for a control, or None when the hit would fall in the gesture strip.
+
+    A center in the bottom 140px is a miss on API 35: the v0.2.33 Continue
+    button sat at y=1897 and the tap never left the balance step. If the
+    control still reaches above the gesture strip, tap that higher point.
+    """
+    if node["x2"] - node["x1"] < 24 or node["y2"] - node["y1"] < 24:
+        return None
+    if node["cy"] < 0 or node["cy"] > height or node["cx"] < 0:
+        return None
+    if node["cy"] < height - safe_margin:
+        return node["cx"], node["cy"]
+    y = min(node["y2"] - 8, node["y1"] + 8)
+    y = min(y, height - gesture_margin - 1)
+    if node["y1"] + 4 <= y <= node["y2"] - 4:
+        return node["cx"], y
+    return None
+
+
 # The row renders the Unicode minus used by the app: −EGP 125.50.
 # Cash-flow text can also expose the same expense as EGP−125.5.
 EXPENSE_125 = (
@@ -193,6 +298,7 @@ class Driver:
                                 "text": text,
                                 "class": node.attrib.get("class") or "",
                                 "clickable": False,
+                                "focused": node.attrib.get("focused") == "true",
                                 "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                                 "cx": 0, "cy": -1,
                             })
@@ -201,6 +307,7 @@ class Driver:
                         "text": text,
                         "class": node.attrib.get("class") or "",
                         "clickable": node.attrib.get("clickable") == "true",
+                        "focused": node.attrib.get("focused") == "true",
                         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                         "cx": (x1 + x2) // 2, "cy": (y1 + y2) // 2,
                     })
@@ -264,7 +371,9 @@ class Driver:
 
     def look(self, needle=None, forbid=()):
         ui = self.dump_nodes()
-        if needle and self.candidates(ui, needle, forbid):
+        usable = self.candidates(ui, needle, forbid) if needle else []
+        in_zone = [node for node in usable if tap_point(node, self.height)]
+        if needle and in_zone:
             print("nodes", "ui", len(ui), "ocr skipped", flush=True)
             return ui
         image = self.shot("screen")
@@ -335,35 +444,99 @@ class Driver:
         self.shell(f"input tap {node['cx']} {node['cy']}")
         time.sleep(0.8)
 
-    def in_tap_zone(self, node):
-        """False when the hit point sits in the system bar or a clipped sliver."""
-        if not self.visible(node):
-            return False
-        return node["cy"] < self.height - 140
+    def scroll_from_safe_area(self):
+        """Scroll the WebView from the title band, not from a text field.
 
-    def nudge_up(self):
+        A swipe that starts on an EditText is swallowed as a caret drag, so
+        the footer Continue stays at the same y. The balance step's title
+        sits near 38% of the screen, above the form.
+        """
         x = self.width // 2
-        self.shell(f"input swipe {x} {int(self.height * 0.70)} {x} {int(self.height * 0.50)} 250")
-        time.sleep(0.5)
+        y_start = int(self.height * 0.38)
+        y_end = int(self.height * 0.16)
+        print("scroll", x, y_start, y_end, flush=True)
+        self.shell(f"input swipe {x} {y_start} {x} {y_end} 450")
+        time.sleep(0.6)
+
+    def tap_xy(self, x, y, label):
+        print(f"tap {x},{y} {label!r}", flush=True)
+        self.shell(f"input tap {x} {y}")
+        time.sleep(0.8)
 
     def tap_text(self, needle, forbid=(), scrolls=4):
         for i in range(scrolls + 1):
             nodes = self.look(needle, forbid)
             matches = self.candidates(nodes, needle, forbid)
-            found = [node for node in matches if self.in_tap_zone(node)]
-            if found:
-                # Prefer a real control over an OCR hit, then the lowest match
-                # so a footer Continue wins over a heading that merely mentions it.
-                found.sort(key=lambda node: (node["class"].startswith("ocr"), -node["cy"]))
-                self.tap_node(found[0])
+            ready = []
+            for node in matches:
+                point = tap_point(node, self.height)
+                if point and self.visible(node):
+                    ready.append((node, point))
+            if ready:
+                # Prefer a real button over an OCR hit or a sentence, then
+                # the lowest match so a footer Continue wins over a heading.
+                ready.sort(key=lambda item: (
+                    item[0]["class"].startswith("ocr"),
+                    not item[0]["class"].endswith("Button"),
+                    not is_control_label(item[0]["text"], needle),
+                    -item[1][1],
+                ))
+                node, (x, y) = ready[0]
+                self.tap_xy(x, y, node["text"])
                 return True
             clipped = [node for node in matches if self.visible(node)]
             if clipped and i < scrolls:
-                print("clipped", needle, clipped[0]["cy"], "nudging", flush=True)
-                self.nudge_up()
+                print("clipped", needle, clipped[0]["cy"], "scrolling", flush=True)
+                self.scroll_from_safe_area()
                 continue
             if i < scrolls:
-                self.swipe_up()
+                self.scroll_from_safe_area()
+        return False
+
+    def activate_focused_control(self, needle, tabs=6):
+        """Tab to a button and press Enter.
+
+        API 35 draws the onboarding footer inside the gesture strip, so a
+        coordinate tap can miss even after the page is scrolled.
+        """
+        target = normalized_label(needle)
+        for _ in range(tabs + 1):
+            nodes = self.dump_nodes()
+            for node in nodes:
+                if not node.get("focused"):
+                    continue
+                label = normalized_label(node["text"])
+                if is_control_label(node["text"], needle) or (
+                    node["class"].endswith("Button") and target in label
+                ):
+                    print("activate", node["text"], flush=True)
+                    self.shell("input keyevent 66")
+                    time.sleep(0.8)
+                    return True
+            self.shell("input keyevent 61")
+            time.sleep(0.35)
+        return False
+
+    def leave_step(self, button, after, forbid=(), attempts=3):
+        """Leave an onboarding step once `after` is on screen.
+
+        Retries a coordinate tap, then Tab/Enter, and waits for the WebView
+        to show the next step. A tap that does not change the page is a miss.
+        """
+        self.hide_keyboard()
+        time.sleep(0.6)
+        for attempt in range(attempts):
+            self.hide_keyboard()
+            time.sleep(0.4)
+            if not self.tap_text(button, forbid=forbid, scrolls=3):
+                print("tap missed", button, "trying focus", attempt, flush=True)
+                self.activate_focused_control(button)
+            try:
+                self.wait_for(after, timeout=12)
+                return True
+            except DriveError:
+                print("did not reach", after, "attempt", attempt, flush=True)
+                self.scroll_from_safe_area()
         return False
 
     def tap_control(self, needle, scrolls=2):
@@ -388,11 +561,48 @@ class Driver:
                 self.swipe_up()
         return False
 
+    def keyboard_shown(self):
+        result = self.shell("dumpsys input_method", check=False, timeout=25)
+        return "mInputShown=true" in (result.stdout or "")
+
+    def blur_inputs(self):
+        """Release the focused editor without tapping a dialog overlay.
+
+        Re-enabling the IME while the balance field stays focused opens the
+        number pad again. A gutter tap does that, and it also hits the
+        transaction sheet's backdrop, which closes the form.
+        """
+        nodes = self.dump_nodes()
+        chosen = choose_blur_node(nodes, self.height, self.width)
+        if chosen is not None:
+            self.tap_node(chosen)
+            return
+        if any(is_control_label(node["text"], "Close") and self.visible(node) for node in nodes):
+            x = self.width // 2
+            y = max(140, int(self.height * 0.2))
+            print(f"blur inside dialog {x},{y}", flush=True)
+            self.shell(f"input tap {x} {y}")
+            time.sleep(0.4)
+            return
+        x = self.width // 2
+        y = max(90, int(self.height * 0.08))
+        print(f"blur tap {x},{y}", flush=True)
+        self.shell(f"input tap {x} {y}")
+        time.sleep(0.4)
+
     def hide_keyboard(self):
         # MainActivity treats Back as "go to the overview", so Back must not
         # be used to dismiss the keyboard.
-        result = self.shell("dumpsys input_method", check=False, timeout=25)
-        if "mInputShown=true" not in (result.stdout or ""):
+        if not self.keyboard_shown():
+            return
+        self.blur_inputs()
+        deadline = time.time() + 3
+        while time.time() < deadline and self.keyboard_shown():
+            time.sleep(0.3)
+        if not self.keyboard_shown():
+            # 100dvh on API 35 keeps the footer in the gesture strip until the
+            # viewport settles after the keyboard closes.
+            time.sleep(0.4)
             return
         ime = self.shell("settings get secure default_input_method", check=False)
         ident = (ime.stdout or "").strip()
@@ -401,9 +611,28 @@ class Driver:
             return
         print("hiding keyboard", ident, flush=True)
         self.shell("ime disable " + ident, check=False)
-        time.sleep(0.3)
+        time.sleep(0.4)
+        self.blur_inputs()
         self.shell("ime enable " + ident, check=False)
-        time.sleep(0.2)
+        time.sleep(0.5)
+
+    def dismiss_anr(self, blob):
+        """Clear a system ANR that covers Folio.
+
+        API 35 once showed Pixel Launcher isn't responding over the first
+        paint, so Meet Folio never entered the accessibility tree. Wait is
+        tapped first. A launcher ANR is also force-stopped, then Folio is
+        brought forward without killing its process.
+        """
+        print("dismiss anr", flush=True)
+        self.tap_text("Wait", scrolls=0)
+        if "launcher" not in blob.lower():
+            return
+        for pkg in ("com.google.android.apps.nexuslauncher", "com.android.launcher3"):
+            self.shell("am force-stop " + pkg, check=False)
+        time.sleep(0.4)
+        self.adb("shell", "am", "start", "-n", ACTIVITY)
+        time.sleep(1)
 
     def wait_for(self, needle, timeout=45, forbid=()):
         deadline = time.time() + timeout
@@ -414,7 +643,7 @@ class Driver:
             if self.candidates(nodes, needle, forbid):
                 return nodes
             if "isn't responding" in last or "not responding" in last.lower():
-                self.tap_text("Wait", scrolls=0)
+                self.dismiss_anr(last)
             time.sleep(1)
         self.save_text("wait-failed.txt", last)
         raise DriveError("timed out waiting for " + needle)
@@ -440,7 +669,23 @@ class Driver:
         edits.sort(key=lambda node: (node["y1"], node["x1"]))
         return edits
 
-    def fill_labeled(self, label, value, numeric=False):
+    def focused_edit(self):
+        nodes = self.dump_nodes()
+        focused = [
+            node for node in nodes
+            if node.get("focused") and node["class"].endswith("EditText")
+        ]
+        return focused[0] if focused else None
+
+    def focus_matches(self, label):
+        focused = self.focused_edit()
+        if not focused:
+            print("no focused edit", label, flush=True)
+            return False
+        print("focused", focused["text"], flush=True)
+        return label.lower() in focused["text"].lower()
+
+    def tap_field(self, label):
         nodes = self.look(label)
         found = [node for node in self.candidates(nodes, label) if self.visible(node)]
         if not found:
@@ -459,15 +704,67 @@ class Driver:
         if edits:
             edits.sort(key=lambda node: abs(node["cy"] - label_node["y2"]))
             self.tap_node(edits[0])
-        else:
-            below = min(self.height - 8, label_node["y2"] + 70)
-            print(f"tap below {label_node['cx']},{below} {label!r}", flush=True)
-            self.shell(f"input tap {label_node['cx']} {below}")
-            time.sleep(0.5)
-        if numeric:
-            self.type_number(value)
-        else:
+            return
+        below = min(self.height - 8, label_node["y2"] + 70)
+        print(f"tap below {label_node['cx']},{below} {label!r}", flush=True)
+        self.shell(f"input tap {label_node['cx']} {below}")
+        time.sleep(0.5)
+
+    def focus_field(self, label):
+        # Drop the keyboard before the tap. On API 35 the number pad covers
+        # the lower fields, and a tap there inserts a digit into the field
+        # that is already focused. Do not type until that field is this one.
+        self.hide_keyboard()
+        if self.focus_matches(label):
+            return
+        self.tap_field(label)
+        if self.focus_matches(label):
+            return
+        print("tab to", label, flush=True)
+        for _ in range(5):
+            self.shell("input keyevent 61")
+            time.sleep(0.35)
+            if self.focus_matches(label):
+                return
+        raise DriveError("could not focus field " + label)
+
+    def focused_field_ok(self, value):
+        focused = self.focused_edit()
+        if not focused:
+            print("field value not exposed", value, flush=True)
+            return True
+        text = focused["text"]
+        print("focused field", text, flush=True)
+        return field_holds(text, value)
+
+    def clear_focused_number(self):
+        self.shell("input keyevent 123")
+        self.shell("input keyevent " + " ".join(["67"] * 28))
+        time.sleep(0.2)
+
+    def fill_labeled(self, label, value, numeric=False):
+        if not numeric:
+            # The transaction sheet auto-focuses its first field. Blurring the
+            # wordmark above that sheet clicks the overlay and closes it.
+            nodes = self.look(label)
+            if not self.candidates(nodes, label):
+                self.hide_keyboard()
+            self.tap_field(label)
             self.type_text(value)
+            return
+        for attempt in range(2):
+            self.focus_field(label)
+            self.type_number(value)
+            if self.focus_matches(label) and self.focused_field_ok(value):
+                return
+            print("retry field", label, attempt, flush=True)
+            # A miss can leave the previous field focused. Deleting there
+            # would wipe the balance that was just entered.
+            if self.focus_matches(label):
+                self.clear_focused_number()
+            else:
+                print("refusing to clear a different field", flush=True)
+        raise DriveError("could not enter " + label)
 
     def require(self, blob, needles, where):
         missing = []
@@ -788,6 +1085,56 @@ Complete
     shell = webview_shell()
     if "am start -W -n" not in shell or "Meet Folio" not in shell:
         raise DriveError("webview shell incomplete")
+    if not is_blur_target("◈ folio."):
+        raise DriveError("wordmark should blur focus")
+    if not is_blur_target("New transaction"):
+        raise DriveError("dialog title should blur focus")
+    if is_blur_target("Meet Folio."):
+        raise DriveError("onboarding title should not be a blur target")
+    if is_blur_target("Open Folio"):
+        raise DriveError("Open Folio should not be a blur target")
+    if is_blur_target("Add transaction"):
+        raise DriveError("Add transaction should not be a blur target")
+    wordmark = {
+        "text": "folio", "class": "android.widget.TextView",
+        "x1": 42, "y1": 44, "x2": 312, "y2": 147, "cx": 177, "cy": 95,
+    }
+    title = {
+        "text": "New transaction", "class": "android.widget.TextView",
+        "x1": 80, "y1": 360, "x2": 700, "y2": 430, "cx": 390, "cy": 395,
+    }
+    chosen = choose_blur_node([wordmark, title], 1920, 1080)
+    if chosen is None or chosen["text"] != "New transaction":
+        raise DriveError("dialog title should win over the wordmark")
+    if choose_blur_node([wordmark], 1920, 1080)["text"] != "folio":
+        raise DriveError("wordmark should blur the onboarding page")
+    if not field_holds("8420.50, Current available balance (EGP)", "8420.50"):
+        raise DriveError("field_holds rejected a clean balance")
+    if not field_holds("8420.5, Current available balance (EGP)", "8420.50"):
+        raise DriveError("field_holds rejected a trimmed decimal")
+    if not field_holds("Expected monthly income (EGP)", "15000"):
+        raise DriveError("field_holds rejected a label-only node")
+    if field_holds("8420.5061500099000, Current available balance (EGP)", "8420.50"):
+        raise DriveError("field_holds accepted piled digits")
+    clipped = {
+        "text": "Continue →", "class": "android.widget.Button",
+        "x1": 690, "y1": 1874, "x2": 1039, "y2": 1920, "cx": 864, "cy": 1897,
+    }
+    if tap_point(clipped, 1920) is not None:
+        raise DriveError("clipped footer should not be tapped in the gesture strip")
+    raised = {
+        "text": "Continue →", "class": "android.widget.Button",
+        "x1": 690, "y1": 1824, "x2": 1039, "y2": 1870, "cx": 864, "cy": 1847,
+    }
+    raised_point = tap_point(raised, 1920)
+    if raised_point is None or raised_point[1] >= 1920 - 72:
+        raise DriveError("raised footer should tap above the gesture strip " + str(raised_point))
+    high = {
+        "text": "Continue →", "class": "android.widget.Button",
+        "x1": 690, "y1": 1680, "x2": 1039, "y2": 1800, "cx": 864, "cy": 1740,
+    }
+    if tap_point(high, 1920) != (864, 1740):
+        raise DriveError("safe center should be used")
     if "$((i + 1))" not in shell or "__PKG__" in shell or "__ACTIVITY__" in shell or PKG not in shell:
         raise DriveError("webview shell substitution failed: " + shell[:400])
     print("SELF_CHECK_OK", flush=True)
@@ -805,7 +1152,7 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     if name != expect_old:
         raise DriveError("expected " + expect_old + ", installed " + name)
     driver.launch()
-    driver.wait_for("Meet Folio", timeout=50)
+    driver.wait_for("Meet Folio", timeout=70)
     driver.shot("onboarding")
     if not driver.tap_text("Continue", forbid=("Android",)):
         raise DriveError("could not tap onboarding Continue")
@@ -814,10 +1161,8 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     driver.fill_labeled("monthly income", "15000", numeric=True)
     driver.fill_labeled("spending target", "9000", numeric=True)
     driver.shot("onboarding-filled")
-    driver.hide_keyboard()
-    if not driver.tap_text("Continue", forbid=("Android",)):
+    if not driver.leave_step("Continue", "Capture only", forbid=("Android",)):
         raise DriveError("could not leave the balance step")
-    driver.wait_for("Capture only", timeout=20)
     if not driver.tap_text("Continue", forbid=("Android",)):
         raise DriveError("could not skip notification access")
     driver.wait_for("Open Folio", timeout=20)
@@ -1094,7 +1439,7 @@ def latency(driver, apk, runs, content_runs):
             driver.adb("push", str(script_path), "/data/local/tmp/folio_webview_time.sh")
             content = []
             attempts = 0
-            while len(content) < content_runs and attempts < content_runs + 4:
+            while len(content) < content_runs and attempts < content_runs + 6:
                 attempts += 1
                 result = driver.adb(
                     "shell", "sh", "/data/local/tmp/folio_webview_time.sh",
@@ -1133,10 +1478,17 @@ def latency(driver, apk, runs, content_runs):
                         "pull", "/data/local/tmp/folio-ui.xml",
                         str(driver.artifacts / ("content-%02d-ui.xml" % attempts)),
                         check=False)
-                    raise DriveError("WebView text Meet Folio was not in the accessibility tree")
+                    # One API 34 sample can miss Meet Folio after earlier
+                    # samples saw it. Retry the cold start; do not drop the
+                    # TotalTime series and do not invent a content time.
+                    print("content miss", attempts, "dumps", poll.get("DUMPS"), flush=True)
+                    continue
                 content.append(row)
             if len(content) < content_runs:
-                raise DriveError("only " + str(len(content)) + " content samples")
+                raise DriveError(
+                    "WebView text Meet Folio was not in the accessibility tree "
+                    + "(" + str(len(content)) + " of " + str(content_runs) + " samples)"
+                )
             driver.adb(
                 "pull", "/data/local/tmp/folio-ui.xml",
                 str(driver.artifacts / "webview-ui.xml"),
