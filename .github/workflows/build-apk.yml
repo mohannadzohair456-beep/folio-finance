@@ -43,6 +43,8 @@ jobs:
         run: node tests/ui.test.cjs
       - name: Test onboarding and Folio assistant
         run: node tests/v2.test.cjs
+      - name: Test Ask Folio assistant engine
+        run: node tests/assistant.test.cjs
       - name: Verify permanent signing identity
         shell: bash
         env:
