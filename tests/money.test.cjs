@@ -178,4 +178,110 @@ assert.equal(FolioData.majorToMinor('19.99'), 1999);
 assert.equal(FolioData.majorToMinor(3500), 350000);
 assert.equal(FolioData.majorToMinor('nope'), null);
 
+// A workspace shaped like a phone that finished v0.2.33 onboarding, plus rows that build would have kept or corrupted.
+const v0233 = {
+  demo: false,
+  currency: 'EGP',
+  capture: true,
+  sources: 'com.google.android.apps.messaging',
+  v2Onboarded: true,
+  monthlyBudgetMinor: 500000,
+  monthlyIncomeMinor: '1500000',
+  reportedBalanceMinor: 842050,
+  balanceReportedAt: '2026-10-01T09:30:00.000Z',
+  budgets: {
+    EGP: { 'Food & drinks': 3500, Shopping: 4000.5 },
+    egp: { Transport: 200 },
+    SAR: { Shopping: 80 }
+  },
+  transactions: [
+    { id: 'salary', source: 'manual', currency: 'EGP', direction: 'income', amountMinor: 3200000, merchant: 'Monthly salary', category: 'Salary', occurredAt: Date.UTC(2026, 9, 1, 8, 0, 0), review: false },
+    { id: 'market', source: 'notification', currency: 'egp', direction: 'Expense', amountMinor: '112000', merchant: 'Carrefour', category: 'Food & drinks', occurredAt: '2026-10-11T20:15:00.000Z', sourcePackage: 'com.example.bank' },
+    { id: 'blank-fields' },
+    null,
+    { id: 'bad-time', merchant: 'Mystery', amountMinor: 500, currency: 'EGP', direction: 'expense', occurredAt: 'not-a-date', category: 'Other' },
+    { id: 'unsafe', merchant: 'Overflow', amountMinor: 1e20, currency: 'EGP', direction: 'expense', occurredAt: Date.UTC(2026, 9, 2), category: 'Other' },
+    { id: 'negative', merchant: 'Reversed', amountMinor: -100, currency: 'EGP', direction: 'expense', occurredAt: Date.UTC(2026, 9, 3), category: 'Other' }
+  ]
+};
+const phone = FolioData.migrate(v0233, null);
+assert.equal(phone.state.v2Onboarded, true);
+assert.equal(phone.state.capture, true);
+assert.equal(phone.state.monthlyBudgetMinor, 500000, 'monthly target stays minor units');
+assert.equal(phone.state.monthlyIncomeMinor, 1500000);
+assert.equal(phone.state.reportedBalanceMinor, 842050);
+assert.equal(phone.state.balanceReportedAt, Date.parse('2026-10-01T09:30:00.000Z'));
+assert.equal(phone.state.budgets.EGP['Food & drinks'], 350000);
+assert.equal(phone.state.budgets.EGP.Shopping, 400050);
+assert.equal(phone.state.budgets.EGP.Transport, 20000, 'egp and EGP budgets land in one currency');
+assert.equal(phone.state.budgets.SAR.Shopping, 8000);
+assert.equal(phone.state.legacySources, v0233.sources, 'a non-array allowlist is kept beside the default');
+assert.ok(Array.isArray(phone.state.sources) && phone.state.sources.length === 3);
+assert.equal(phone.state.transactions.length, 7, 'null and incomplete rows are kept');
+const market = phone.state.transactions.find(row => row.id === 'market');
+assert.equal(market.direction, 'expense');
+assert.equal(market.currency, 'EGP');
+assert.equal(market.amountMinor, 112000);
+assert.equal(market.occurredAt, Date.parse('2026-10-11T20:15:00.000Z'));
+assert.equal(market.sourcePackage, 'com.example.bank');
+assert.equal(phone.state.transactions.find(row => row.id === 'bad-time').occurredAt, 'not-a-date');
+const phoneTotals = FolioData.summarize(phone.state.transactions, 'EGP');
+assert.equal(phoneTotals.income, 3200000);
+assert.equal(phoneTotals.expense, 112500, 'unsafe and negative amounts are not added in');
+assert.equal(phone.state.transactions.find(row => row.id === 'unsafe').amountMinor, 1e20);
+const phoneAgain = FolioData.migrate(phone.state, null);
+assert.equal(phoneAgain.state.budgets.EGP['Food & drinks'], 350000);
+assert.equal(phoneAgain.state.transactions.length, 7);
+assert.equal(phoneAgain.snapshot, null);
+
+const booksOnly = FolioData.migrate({
+  currency: 'SAR',
+  reportedBalanceMinor: 250000,
+  budgets: { SAR: { Shopping: 90 } },
+  v2Onboarded: true
+}, null);
+assert.equal(booksOnly.state.transactions.length, 0);
+assert.equal(booksOnly.state.reportedBalanceMinor, 250000);
+assert.equal(booksOnly.state.budgets.SAR.Shopping, 9000, 'budgets survive when the transactions array is missing');
+
+function legacyExport(rows) {
+  const quote = value => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+  const header = ['Date', 'Direction', 'Merchant', 'Category', 'Amount', 'Currency', 'Source', 'Source package'];
+  const body = rows.map(row => [
+    new Date(row.occurredAt).toISOString().slice(0, 10),
+    row.direction,
+    row.merchant,
+    row.category,
+    (row.amountMinor / 100).toFixed(2),
+    row.currency,
+    row.source,
+    row.sourcePackage || ''
+  ]);
+  return [header, ...body].map(row => row.map(quote).join(',')).join('\r\n');
+}
+const cairoNight = Date.parse('2026-10-11T22:30:00.000Z');
+const exported = legacyExport([
+  { occurredAt: cairoNight, direction: 'expense', merchant: 'Coffee, Sandwiches', category: 'Food & drinks', amountMinor: 13550, currency: 'EGP', source: 'manual', sourcePackage: '' },
+  { occurredAt: Date.parse('2026-10-02T10:00:00.000Z'), direction: 'income', merchant: 'راتب', category: 'Salary', amountMinor: 1850000, currency: 'EGP', source: 'notification', sourcePackage: 'com.google.android.apps.messaging' }
+]);
+const fromPhone = FolioData.transactionsFromCsv(exported);
+assert.equal(fromPhone.length, 2);
+assert.equal(fromPhone[0].merchant, 'Coffee, Sandwiches');
+assert.equal(fromPhone[0].amountMinor, 13550);
+assert.equal(fromPhone[0].category, 'Food & drinks');
+assert.equal(new Date(fromPhone[0].occurredAt).toISOString().slice(0, 10), '2026-10-11');
+assert.equal(fromPhone[1].merchant, 'راتب');
+assert.equal(fromPhone[1].amountMinor, 1850000);
+assert.equal(fromPhone[1].sourcePackage, 'com.google.android.apps.messaging');
+assert.equal(FolioData.transactionsFromCsv(exported)[0].id, fromPhone[0].id);
+
+const serialWhen = FolioData.transactionsFromCsv('Date,Direction,Merchant,Category,Amount,Currency\n45940,debit,Jarir,Shopping,86.50,SAR\n')[0];
+assert.equal(serialWhen.direction, 'expense');
+assert.equal(serialWhen.amountMinor, 8650);
+const serialDay = new Date(serialWhen.occurredAt);
+assert.equal(serialDay.getFullYear(), 2025);
+assert.equal(serialDay.getMonth(), 9);
+assert.equal(serialDay.getDate(), 10);
+assert.throws(() => FolioData.transactionsFromCsv(exported.replace('"135.50"', '"nope"')), /amount/i);
+
 console.log('PASS money, migration, backup and legacy CSV checks');

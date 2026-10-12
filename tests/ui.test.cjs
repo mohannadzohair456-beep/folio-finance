@@ -104,4 +104,38 @@ for (const name of ['folio-data.js','folio-v2.js','folio-v2.css']) {
 }
 assert.equal(fs.readFileSync('android/app/src/main/res/values/strings.xml','utf8').includes('>Folio<'), true);
 
+const hostileBooks=boot({
+  demo:false,
+  currency:'EGP',
+  capture:true,
+  v2Onboarded:true,
+  monthlyBudgetMinor:500000,
+  monthlyIncomeMinor:1500000,
+  reportedBalanceMinor:842050,
+  balanceReportedAt:Date.parse('2026-10-01T09:30:00.000Z'),
+  budgets:{EGP:{'Food & drinks':3500,Shopping:4000},SAR:{Shopping:80}},
+  transactions:[
+    {id:'salary',source:'manual',currency:'EGP',direction:'income',amountMinor:3200000,merchant:'Monthly salary',category:'Salary',occurredAt:Date.now()},
+    {id:'market',source:'notification',currency:'EGP',direction:'expense',amountMinor:112000,merchant:'Carrefour',category:'Food & drinks',occurredAt:'2026-10-11T20:15:00.000Z'},
+    {id:'bad',merchant:'Mystery',amountMinor:500,currency:'EGP',direction:'expense',occurredAt:'not-a-date',category:'Other'},
+    null
+  ]
+});
+hostileBooks.sandbox.window.scrollTo=()=>{};
+hostileBooks.sandbox.document.createElement=()=>({click(){},remove(){}});
+hostileBooks.sandbox.document.body={appendChild(){}};
+hostileBooks.sandbox.URL={createObjectURL:()=>'blob:folio',revokeObjectURL(){}};
+hostileBooks.sandbox.Blob=function Blob(){};
+for (const screen of ['overview','transactions','insights','budgets','settings']) {
+  assert.doesNotThrow(()=>vm.runInContext(`nav('${screen}')`, hostileBooks.sandbox), screen+' renders malformed v0.2.33 rows');
+  if (screen==='budgets') assert.ok(hostileBooks.doc.getElementById('root').innerHTML.includes('Food'), 'category budgets survive the upgrade render');
+  if (screen==='overview') assert.ok(hostileBooks.doc.getElementById('root').innerHTML.includes('Carrefour'), 'a dated expense still appears after upgrade');
+}
+assert.doesNotThrow(()=>vm.runInContext('exportCsv()', hostileBooks.sandbox), 'CSV export survives an unparseable date');
+const savedBooks=JSON.parse(hostileBooks.data.get('folio_finance_v1'));
+assert.equal(savedBooks.budgets.EGP['Food & drinks'], 350000);
+assert.equal(savedBooks.reportedBalanceMinor, 842050);
+assert.equal(savedBooks.transactions.length, 4);
+assert.ok(savedBooks.transactions.some(row=>row&&row.occurredAt==='not-a-date'));
+
 console.log('PASS bundled interface and tracking setup checks');

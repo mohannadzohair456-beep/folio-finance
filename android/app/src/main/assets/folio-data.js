@@ -74,15 +74,31 @@
     }
     const copy = Object.assign({}, entry);
     if (copy.id == null || copy.id === '') copy.id = 'legacy-' + index + '-' + (copy.occurredAt || 0);
-    if (!copy.merchant) copy.merchant = 'Transaction';
-    if (!copy.category) copy.category = 'Other';
-    if (!copy.source) copy.source = 'manual';
+    if (copy.merchant == null || copy.merchant === '') copy.merchant = 'Transaction';
+    if (copy.category == null || copy.category === '') copy.category = 'Other';
+    if (copy.source == null || copy.source === '') copy.source = 'manual';
     if (copy.amountMinor == null && copy.amount != null) {
       const minor = majorToMinor(copy.amount);
       if (minor != null) copy.amountMinor = minor;
     }
-    if (typeof copy.amountMinor === 'string' && /^-?\d+$/.test(copy.amountMinor.trim())) {
-      copy.amountMinor = Number(copy.amountMinor.trim());
+    if (typeof copy.amountMinor === 'string') {
+      const parsedAmount = Number(String(copy.amountMinor).trim());
+      if (Number.isSafeInteger(parsedAmount)) copy.amountMinor = parsedAmount;
+    }
+    const direction = canonicalDirection(copy.direction);
+    if (direction && direction !== copy.direction) {
+      copy.legacyDirection = copy.direction;
+      copy.direction = direction;
+    }
+    const currency = canonicalCurrency(copy.currency);
+    if (currency && currency !== copy.currency) {
+      copy.legacyCurrency = copy.currency;
+      copy.currency = currency;
+    }
+    const when = transactionTime(copy.occurredAt);
+    if (when != null && when !== copy.occurredAt) {
+      copy.legacyOccurredAt = copy.occurredAt;
+      copy.occurredAt = when;
     }
     return copy;
   }
@@ -96,15 +112,17 @@
     }
     Object.keys(budgets).forEach(currency => {
       const cats = budgets[currency];
+      const bucket = canonicalCurrency(currency) || currency;
       if (cats == null || typeof cats !== 'object' || Array.isArray(cats)) {
         legacy.push({ currency: currency, value: cats });
         return;
       }
-      out[currency] = {};
+      if (!out[bucket]) out[bucket] = {};
       Object.keys(cats).forEach(cat => {
         const minor = convert(cats[cat]);
         if (minor == null || minor < 0 || !Number.isSafeInteger(minor)) legacy.push({ currency: currency, category: cat, value: cats[cat] });
-        else out[currency][cat] = minor;
+        else if (Object.prototype.hasOwnProperty.call(out[bucket], cat)) legacy.push({ currency: currency, category: cat, value: cats[cat], reason: 'duplicate-category' });
+        else out[bucket][cat] = minor;
       });
     });
     return out;
@@ -114,6 +132,36 @@
     const n = Number(value);
     if (!Number.isFinite(n) || !Number.isSafeInteger(Math.round(n))) return null;
     return Math.round(n);
+  }
+
+  function canonicalCurrency(value) {
+    const text = String(value == null ? '' : value).trim().toUpperCase();
+    return CURRENCIES.indexOf(text) >= 0 ? text : null;
+  }
+
+  /** Epoch millis the v0.2.33 page understood: a number, a numeric string, or a date string. */
+  function transactionTime(value) {
+    if (value == null || value === '') return null;
+    if (value instanceof Date) {
+      const time = value.getTime();
+      return Number.isFinite(time) ? time : null;
+    }
+    if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null;
+    const text = String(value).trim().replace(/\u00a0/g, '');
+    if (!text) return null;
+    if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+      const n = Number(text);
+      return Number.isFinite(n) ? Math.round(n) : null;
+    }
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function canonicalDirection(value) {
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    if (text === 'expense' || text === 'debit' || text === 'withdrawal' || text === 'purchase') return 'expense';
+    if (text === 'income' || text === 'credit' || text === 'deposit' || text === 'refund') return 'income';
+    return '';
   }
 
   function migrate(input, corruptText) {
@@ -170,12 +218,15 @@
     if (input.currency != null && state.currency !== input.currency) state.legacyCurrency = input.currency;
     state.capture = input.capture === true;
     state.v2Onboarded = input.v2Onboarded === true;
-    state.sources = Array.isArray(input.sources)
-      ? input.sources.filter(item => typeof item === 'string')
-      : DEFAULT_SOURCES.slice();
     if (Array.isArray(input.sources)) {
+      state.sources = input.sources.filter(item => typeof item === 'string');
       const dropped = input.sources.filter(item => typeof item !== 'string');
       if (dropped.length) state.legacySources = clone(dropped);
+    } else if (input.sources == null) {
+      state.sources = DEFAULT_SOURCES.slice();
+    } else {
+      state.sources = DEFAULT_SOURCES.slice();
+      state.legacySources = clone(input.sources);
     }
 
     const balance = input.reportedBalanceMinor;
@@ -185,7 +236,7 @@
       state.reportedBalanceMinor = minor;
       if (minor == null) state.legacyReportedBalance = clone(balance);
     }
-    const reportedAt = finiteMinor(input.balanceReportedAt);
+    const reportedAt = transactionTime(input.balanceReportedAt);
     state.balanceReportedAt = input.balanceReportedAt == null || input.balanceReportedAt === '' ? null : reportedAt;
     if (input.balanceReportedAt != null && input.balanceReportedAt !== '' && reportedAt == null) {
       state.legacyBalanceReportedAt = clone(input.balanceReportedAt);
@@ -228,7 +279,7 @@
     (records || []).forEach(entry => {
       if (!entry || typeof entry !== 'object') return;
       const amount = Number(entry.amountMinor);
-      if (!Number.isFinite(amount)) return;
+      if (!Number.isSafeInteger(amount) || amount <= 0) return;
       if (entry.direction !== 'income' && entry.direction !== 'expense') return;
       const currency = entry.currency || '';
       if (!byCurrency[currency]) byCurrency[currency] = { income: 0, expense: 0, net: 0, currency: currency };
@@ -340,6 +391,7 @@
   }
 
   function parseCalendarDate(day) {
+    day = String(day == null ? '' : day).trim().replace(/\u00a0/g, '');
     const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
     const slash = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/.exec(day);
     let year;
@@ -354,6 +406,13 @@
       date = Number(slash[1]);
       month = Number(slash[2]);
       year = Number(slash[3]);
+    } else if (/^\d{5}(?:\.0+)?$/.test(String(day).trim())) {
+      // Excel day count since 1899-12-30, including the fictional 1900-02-29.
+      const serial = Number(day);
+      const utc = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      year = utc.getUTCFullYear();
+      month = utc.getUTCMonth() + 1;
+      date = utc.getUTCDate();
     } else return null;
     if (month < 1 || month > 12 || date < 1 || date > 31 || year < 1970 || year > 2100) return null;
     const local = new Date(year, month - 1, date, 12, 0, 0, 0);
@@ -369,7 +428,7 @@
   }
 
   function parseAmountCell(raw) {
-    let text = String(raw == null ? '' : raw).trim();
+    let text = String(raw == null ? '' : raw).trim().replace(/\u00a0/g, '');
     text = text.replace(/^(?:EGP|USD|SAR|AED|EUR|GBP|LE|SR)\s*/i, '').replace(/\s*(?:EGP|USD|SAR|AED|EUR|GBP|LE|SR)$/i, '');
     if (/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/.test(text)) text = text.replace(/,/g, '');
     if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
@@ -445,6 +504,7 @@
     CURRENCIES: CURRENCIES,
     emptyState: emptyState,
     majorToMinor: majorToMinor,
+    transactionTime: transactionTime,
     migrate: migrate,
     summarize: summarize,
     budgetTotalMinor: budgetTotalMinor,

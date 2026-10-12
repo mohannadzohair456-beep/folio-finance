@@ -15,6 +15,8 @@ A category budget of 3500 EGP in schema 0 becomes `350000`. A second launch sees
 
 Rows that are missing a merchant, amount, direction, or even a usable object are kept. Demo rows (`source: 'demo'` while `demo: true`) are still removed, which is the existing sample-data transition. Unparseable budget cells are copied to `legacyUnparsedBudgets` instead of being deleted. A storage value that is not JSON is left in the pre-migration snapshot and the working copy starts empty so the page can open.
 
+A v0.2.33 workspace can omit `transactions` and still keep its budgets and reported balance. `egp` and `EGP` category maps are folded together; a second amount for the same category is kept in `legacyUnparsedBudgets` instead of being added twice. `Expense` / `egp`, numeric strings, and ISO timestamps are normalized when the meaning is unambiguous. An unparseable timestamp stays on the row. Totals ignore non-integers, zeroes, and negative `amountMinor` values so one corrupt amount cannot erase the month. CSV export skips those incomplete rows instead of throwing, and the rows remain in the JSON workspace. A non-array allowlist is copied to `legacySources` and the working allowlist falls back to the default SMS packages.
+
 ## Pre-migration snapshot
 
 The first time schema 0 (or a demo workspace) is opened, Folio writes `localStorage['folio_finance_premigration_snapshot']` if that key is empty. The value is:
@@ -53,6 +55,7 @@ Import also accepts:
 - `Expense` / `Income`, plus debit/credit aliases
 - Amounts with a thousands comma inside quotes (`"1,250.00"`)
 - Day/month/year dates (`10/10/2026`) in addition to `YYYY-MM-DD`
+- An Excel day serial such as `45940` (10 October 2025)
 
 An invalid currency or amount rejects the whole file and leaves the saved workspace unchanged. Re-importing the same file does not duplicate rows. Ids are a hash of the file plus the row number.
 

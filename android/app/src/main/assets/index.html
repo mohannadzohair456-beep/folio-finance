@@ -89,15 +89,31 @@
     }
     const copy = Object.assign({}, entry);
     if (copy.id == null || copy.id === '') copy.id = 'legacy-' + index + '-' + (copy.occurredAt || 0);
-    if (!copy.merchant) copy.merchant = 'Transaction';
-    if (!copy.category) copy.category = 'Other';
-    if (!copy.source) copy.source = 'manual';
+    if (copy.merchant == null || copy.merchant === '') copy.merchant = 'Transaction';
+    if (copy.category == null || copy.category === '') copy.category = 'Other';
+    if (copy.source == null || copy.source === '') copy.source = 'manual';
     if (copy.amountMinor == null && copy.amount != null) {
       const minor = majorToMinor(copy.amount);
       if (minor != null) copy.amountMinor = minor;
     }
-    if (typeof copy.amountMinor === 'string' && /^-?\d+$/.test(copy.amountMinor.trim())) {
-      copy.amountMinor = Number(copy.amountMinor.trim());
+    if (typeof copy.amountMinor === 'string') {
+      const parsedAmount = Number(String(copy.amountMinor).trim());
+      if (Number.isSafeInteger(parsedAmount)) copy.amountMinor = parsedAmount;
+    }
+    const direction = canonicalDirection(copy.direction);
+    if (direction && direction !== copy.direction) {
+      copy.legacyDirection = copy.direction;
+      copy.direction = direction;
+    }
+    const currency = canonicalCurrency(copy.currency);
+    if (currency && currency !== copy.currency) {
+      copy.legacyCurrency = copy.currency;
+      copy.currency = currency;
+    }
+    const when = transactionTime(copy.occurredAt);
+    if (when != null && when !== copy.occurredAt) {
+      copy.legacyOccurredAt = copy.occurredAt;
+      copy.occurredAt = when;
     }
     return copy;
   }
@@ -111,15 +127,17 @@
     }
     Object.keys(budgets).forEach(currency => {
       const cats = budgets[currency];
+      const bucket = canonicalCurrency(currency) || currency;
       if (cats == null || typeof cats !== 'object' || Array.isArray(cats)) {
         legacy.push({ currency: currency, value: cats });
         return;
       }
-      out[currency] = {};
+      if (!out[bucket]) out[bucket] = {};
       Object.keys(cats).forEach(cat => {
         const minor = convert(cats[cat]);
         if (minor == null || minor < 0 || !Number.isSafeInteger(minor)) legacy.push({ currency: currency, category: cat, value: cats[cat] });
-        else out[currency][cat] = minor;
+        else if (Object.prototype.hasOwnProperty.call(out[bucket], cat)) legacy.push({ currency: currency, category: cat, value: cats[cat], reason: 'duplicate-category' });
+        else out[bucket][cat] = minor;
       });
     });
     return out;
@@ -129,6 +147,36 @@
     const n = Number(value);
     if (!Number.isFinite(n) || !Number.isSafeInteger(Math.round(n))) return null;
     return Math.round(n);
+  }
+
+  function canonicalCurrency(value) {
+    const text = String(value == null ? '' : value).trim().toUpperCase();
+    return CURRENCIES.indexOf(text) >= 0 ? text : null;
+  }
+
+  /** Epoch millis the v0.2.33 page understood: a number, a numeric string, or a date string. */
+  function transactionTime(value) {
+    if (value == null || value === '') return null;
+    if (value instanceof Date) {
+      const time = value.getTime();
+      return Number.isFinite(time) ? time : null;
+    }
+    if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null;
+    const text = String(value).trim().replace(/\u00a0/g, '');
+    if (!text) return null;
+    if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+      const n = Number(text);
+      return Number.isFinite(n) ? Math.round(n) : null;
+    }
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function canonicalDirection(value) {
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    if (text === 'expense' || text === 'debit' || text === 'withdrawal' || text === 'purchase') return 'expense';
+    if (text === 'income' || text === 'credit' || text === 'deposit' || text === 'refund') return 'income';
+    return '';
   }
 
   function migrate(input, corruptText) {
@@ -185,12 +233,15 @@
     if (input.currency != null && state.currency !== input.currency) state.legacyCurrency = input.currency;
     state.capture = input.capture === true;
     state.v2Onboarded = input.v2Onboarded === true;
-    state.sources = Array.isArray(input.sources)
-      ? input.sources.filter(item => typeof item === 'string')
-      : DEFAULT_SOURCES.slice();
     if (Array.isArray(input.sources)) {
+      state.sources = input.sources.filter(item => typeof item === 'string');
       const dropped = input.sources.filter(item => typeof item !== 'string');
       if (dropped.length) state.legacySources = clone(dropped);
+    } else if (input.sources == null) {
+      state.sources = DEFAULT_SOURCES.slice();
+    } else {
+      state.sources = DEFAULT_SOURCES.slice();
+      state.legacySources = clone(input.sources);
     }
 
     const balance = input.reportedBalanceMinor;
@@ -200,7 +251,7 @@
       state.reportedBalanceMinor = minor;
       if (minor == null) state.legacyReportedBalance = clone(balance);
     }
-    const reportedAt = finiteMinor(input.balanceReportedAt);
+    const reportedAt = transactionTime(input.balanceReportedAt);
     state.balanceReportedAt = input.balanceReportedAt == null || input.balanceReportedAt === '' ? null : reportedAt;
     if (input.balanceReportedAt != null && input.balanceReportedAt !== '' && reportedAt == null) {
       state.legacyBalanceReportedAt = clone(input.balanceReportedAt);
@@ -243,7 +294,7 @@
     (records || []).forEach(entry => {
       if (!entry || typeof entry !== 'object') return;
       const amount = Number(entry.amountMinor);
-      if (!Number.isFinite(amount)) return;
+      if (!Number.isSafeInteger(amount) || amount <= 0) return;
       if (entry.direction !== 'income' && entry.direction !== 'expense') return;
       const currency = entry.currency || '';
       if (!byCurrency[currency]) byCurrency[currency] = { income: 0, expense: 0, net: 0, currency: currency };
@@ -355,6 +406,7 @@
   }
 
   function parseCalendarDate(day) {
+    day = String(day == null ? '' : day).trim().replace(/\u00a0/g, '');
     const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
     const slash = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/.exec(day);
     let year;
@@ -369,6 +421,13 @@
       date = Number(slash[1]);
       month = Number(slash[2]);
       year = Number(slash[3]);
+    } else if (/^\d{5}(?:\.0+)?$/.test(String(day).trim())) {
+      // Excel day count since 1899-12-30, including the fictional 1900-02-29.
+      const serial = Number(day);
+      const utc = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      year = utc.getUTCFullYear();
+      month = utc.getUTCMonth() + 1;
+      date = utc.getUTCDate();
     } else return null;
     if (month < 1 || month > 12 || date < 1 || date > 31 || year < 1970 || year > 2100) return null;
     const local = new Date(year, month - 1, date, 12, 0, 0, 0);
@@ -384,7 +443,7 @@
   }
 
   function parseAmountCell(raw) {
-    let text = String(raw == null ? '' : raw).trim();
+    let text = String(raw == null ? '' : raw).trim().replace(/\u00a0/g, '');
     text = text.replace(/^(?:EGP|USD|SAR|AED|EUR|GBP|LE|SR)\s*/i, '').replace(/\s*(?:EGP|USD|SAR|AED|EUR|GBP|LE|SR)$/i, '');
     if (/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/.test(text)) text = text.replace(/,/g, '');
     if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
@@ -460,6 +519,7 @@
     CURRENCIES: CURRENCIES,
     emptyState: emptyState,
     majorToMinor: majorToMinor,
+    transactionTime: transactionTime,
     migrate: migrate,
     summarize: summarize,
     budgetTotalMinor: budgetTotalMinor,
@@ -468,7 +528,6 @@
     transactionsFromCsv: transactionsFromCsv
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
-
 /* </folio-inline:folio-data.js> */
 /* Folio: offline-first, no tracking or network requests. Amounts stored in integer minor units. */
 const STORAGE = 'folio_finance_v1';
@@ -522,7 +581,7 @@ function emptyState(){return FolioData.emptyState();}
 function load(){let rawText=null;try{rawText=localStorage.getItem(STORAGE);}catch(e){rawText=null;}let parsed=null,corrupt=false;if(rawText!=null){try{parsed=JSON.parse(rawText);}catch(e){corrupt=true;}}let result;try{result=FolioData.migrate(corrupt?undefined:parsed,corrupt?rawText:null);}catch(e){result={state:FolioData.emptyState(),snapshot:{folioSnapshot:'premigration',reason:'migrate-error',raw:rawText}};}if(result.snapshot!=null){try{if(localStorage.getItem(FolioData.SNAPSHOT_KEY)==null)localStorage.setItem(FolioData.SNAPSHOT_KEY,JSON.stringify(result.snapshot));}catch(e){}}return result.state;}
 let state=load(), page='overview', filter='all', query='', currentEdit=null, modalType='expense', toastTimer, permissionStatus=false, captureDiagnostics={allowed:0,parsed:0,unrecognized:0,lastAt:0,lastResult:''}, observedSources=[];
 function persist(){try{state.schemaVersion=FolioData.SCHEMA_VERSION;localStorage.setItem(STORAGE,JSON.stringify(state));return true;}catch(e){notify('Could not save. Please check your device storage.');return false;}}
-function monthTx(offset=0){return monthAll(offset).filter(t=>t.currency===state.currency);}function monthAll(offset=0){const date=new Date(),m=date.getMonth()-offset,y=date.getFullYear();return state.transactions.filter(t=>{if(!t||typeof t!=='object')return false;const x=new Date(Number(t.occurredAt));if(!Number.isFinite(x.getTime()))return false;return x.getMonth()===((m%12)+12)%12&&x.getFullYear()===y+Math.floor(m/12);});}function foreignCurrencyNote(records){const summary=FolioData.summarize(records,state.currency);const bits=[];Object.keys(summary.byCurrency).sort().forEach(cur=>{if(cur===state.currency)return;const s=summary.byCurrency[cur];const label=cur||'Unspecified currency';bits.push(label+' in '+fmt(s.income,cur||state.currency)+', out '+fmt(s.expense,cur||state.currency));});if(!bits.length)return '';return `<p class="tracking-note">Not added into ${h(state.currency)} totals. ${h(bits.join(' · '))}</p>`;}function otherCurrencySection(){const list=state.transactions.filter(t=>t&&t.currency!==state.currency);if(!list.length)return '';return `<section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>Other currencies</h2><p>Kept separate from ${h(state.currency)}. These amounts are not added into the totals above.</p></div></div>${list.map(singleTx).join('')}</section>`;}function otherBudgetNote(){const keys=Object.keys(state.budgets||{}).filter(c=>c!==state.currency&&state.budgets[c]&&Object.keys(state.budgets[c]).length);if(!keys.length)return '';return `<p class="tracking-note">Budgets in ${h(keys.join(', '))} are stored separately and are not added to ${h(state.currency)}. Switch the reporting currency in Settings to see them.</p>`;}
+function monthTx(offset=0){return monthAll(offset).filter(t=>t.currency===state.currency);}function txWhen(value){const when=FolioData.transactionTime(value);return when==null?new Date(NaN):new Date(when);}function monthAll(offset=0){const date=new Date(),m=date.getMonth()-offset,y=date.getFullYear();return state.transactions.filter(t=>{if(!t||typeof t!=='object')return false;const x=txWhen(t.occurredAt);if(!Number.isFinite(x.getTime()))return false;return x.getMonth()===((m%12)+12)%12&&x.getFullYear()===y+Math.floor(m/12);});}function foreignCurrencyNote(records){const summary=FolioData.summarize(records,state.currency);const bits=[];Object.keys(summary.byCurrency).sort().forEach(cur=>{if(cur===state.currency)return;const s=summary.byCurrency[cur];const label=cur||'Unspecified currency';bits.push(label+' in '+fmt(s.income,cur||state.currency)+', out '+fmt(s.expense,cur||state.currency));});if(!bits.length)return '';return `<p class="tracking-note">Not added into ${h(state.currency)} totals. ${h(bits.join(' · '))}</p>`;}function otherCurrencySection(){const list=state.transactions.filter(t=>t&&t.currency!==state.currency);if(!list.length)return '';return `<section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>Other currencies</h2><p>Kept separate from ${h(state.currency)}. These amounts are not added into the totals above.</p></div></div>${list.map(singleTx).join('')}</section>`;}function otherBudgetNote(){const keys=Object.keys(state.budgets||{}).filter(c=>c!==state.currency&&state.budgets[c]&&Object.keys(state.budgets[c]).length);if(!keys.length)return '';return `<p class="tracking-note">Budgets in ${h(keys.join(', '))} are stored separately and are not added to ${h(state.currency)}. Switch the reporting currency in Settings to see them.</p>`;}
 function txStats(records){return FolioData.summarize(records,state.currency);}
 function currentBudgets(){return state.budgets[state.currency]||(state.budgets[state.currency]={});}
 function catTotals(records){let map={};records.filter(t=>t&&t.direction==='expense'&&Number.isFinite(Number(t.amountMinor))).forEach(t=>{const cat=t.category||'Other';map[cat]=(map[cat]||0)+Number(t.amountMinor);});return Object.entries(map).sort((a,b)=>b[1]-a[1]);}
@@ -575,20 +634,20 @@ function donut(){let totals=catTotals(monthTx());let total=totals.reduce((a,b)=>
  let degree=0;let sections=totals.map(([name,val])=>{let start=degree;degree+=val/total*360;return `${COLORS[name]||'#becdc3'} ${start}deg ${degree}deg`;});let gradient=`conic-gradient(${sections.join(',')})`;
  return `<div class="donut-layout"><div class="donut" style="background:${gradient}"><div class="donut-inner"><strong>${totals.length}</strong><span>categories</span></div></div><div class="donut-legend">${totals.slice(0,5).map(([cat,v])=>`<div class="category-row"><div class="left"><i class="dot" style="background:${COLORS[cat]||'#becdc3'}"></i><span class="name">${h(cat)}</span></div><strong>${Math.round(v/total*100)}%</strong></div>`).join('')}</div></div>`;}
 function singleTx(t){const ico=catIcon(t.category||'Other'),iclass=String(t.category||'Other').toLowerCase().replace(/[^a-z]/g,'').replace('fooddrinks','food').replace('billsutilities','bills');const date=new Date(t.occurredAt);const sameDay=date.toDateString()===new Date().toDateString();return `<div class="transaction-row" tabindex="0" role="button" aria-label="Edit ${h(t.merchant)}" onclick="editById('${h(t.id)}')" onkeydown="if(event.key==='Enter')editById('${h(t.id)}')"><div class="tr-left"><div class="tr-icon ${iclass}">${icon(ico)}</div><div style="min-width:0"><div class="tr-title">${h(t.merchant)}</div><div class="tr-sub">${h(t.category)} · ${t.source==='notification'?'Auto-detected · Review':t.source==='demo'?'Sample':'Manual'}</div></div></div><div class="tr-right"><div class="tr-amount ${t.direction==='income'?'positive':''}">${t.direction==='income'?'+':'−'}${fmt(t.amountMinor,t.currency)}</div><div class="tr-meta">${sameDay?'Today':date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div></div></div>`;}
-function lastTx(n=5){return [...state.transactions].filter(t=>t.currency===state.currency).sort((a,b)=>b.occurredAt-a.occurredAt).slice(0,n);}
+function txSortKey(t){const when=FolioData.transactionTime(t&&t.occurredAt);return when==null?0:when;}function lastTx(n=5){return [...state.transactions].filter(t=>t&&t.currency===state.currency).sort((a,b)=>txSortKey(b)-txSortKey(a)).slice(0,n);}
 function recentPanel(){const tx=lastTx(5);return `<section class="panel"><div class="panel-heading"><div><h2>Recent activity</h2><p>Your latest money movements</p></div><button class="mini-link" onclick="nav('transactions')">View all ${icon('arrow',13)}</button></div>${tx.length?`<div class="transaction-list">${tx.map(singleTx).join('')}</div>`:empty('Your activity starts here','Add a transaction or connect notification tracking.')}</section>`;}
 function empty(title,msg){return `<div class="empty"><div class="bubble">${icon('wallet',23)}</div><strong>${h(title)}</strong>${h(msg)}</div>`;}
 function overview(){let stats=txStats(monthTx()),limits=currentBudgets(),budgetMinor=Object.keys(limits).reduce((s,k)=>s+(Number.isFinite(Number(limits[k]))?Number(limits[k]):0),0),spentMinor=monthTx().filter(t=>t&&t.direction==='expense'&&Number.isFinite(Number(limits[t.category]))).reduce((s,t)=>s+Number(t.amountMinor||0),0),bpct=budgetMinor?Math.min(100,spentMinor/budgetMinor*100):0,budgetTotal=budgetMinor>0;
  return `${heading('YOUR FINANCIAL SPACE','Your money, in focus.','Here’s what your finances look like this month.')}${demoNotice()}${foreignCurrencyNote(monthAll())}<div class="v2-overview-entry"><button class="v2-ai-entry" onclick="nav('assistant')">${icon('sparkle',16)} Ask Folio · Financial companion →</button>${window.FolioV2&&window.FolioV2.estimatedBalance()!==null?`<span class="v2-mini-balance">Available estimate · ${fmt(window.FolioV2.estimatedBalance(),state.currency)}</span>`:''}</div>${state.monthlyBudgetMinor>0?`<div class="v2-planning-banner"><span>Monthly spending target</span><strong>${fmt(state.monthlyBudgetMinor,state.currency)}</strong><small>${fmt(state.monthlyBudgetMinor-txStats(monthTx()).expense,state.currency)} left after recorded spending · manually planned</small></div>`:''}<div class="metrics">${metric('Net cash flow',stats.net,'net',stats.net>=0?'More coming in than going out':'Spending exceeds income',true)}${metric('Money in',stats.income,'in',`${monthTx().filter(t=>t.direction==='income').length} incoming transactions`)}${metric('Money out',stats.expense,'out',`${monthTx().filter(t=>t.direction==='expense').length} outgoing transactions`)}</div><div class="dashboard-grid"><section class="panel"><div class="panel-heading"><div><h2>Cash flow overview</h2><p>How your money is moving through ${monthTitle()}</p></div><span class="chip">This month</span></div>${cashChart()}</section><section class="panel"><div class="panel-heading"><div><h2>Where money went</h2><p>Expenses by category</p></div><button class="mini-link" onclick="nav('insights')">Explore ${icon('arrow',13)}</button></div>${donut()}</section></div><div class="lower-grid">${recentPanel()}<section class="panel"><div class="panel-heading"><div><h2>Budget snapshot</h2><p>Stay comfortably on track</p></div><button class="mini-link" onclick="nav('budgets')">Manage ${icon('arrow',13)}</button></div><div class="budget-card"><div class="budget-top"><span class="budget-icon">${icon('wallet',19)}</span><span class="chip" style="background:#e1f0db;border-color:#d9eacb">${budgetTotal?Math.round(bpct)+'% used':'Not set'}</span></div><strong>${budgetTotal?fmt(Math.max(0,budgetMinor-spentMinor),state.currency)+' left to spend':'Make a plan that works'}</strong><p>${budgetTotal?'Across your categories with monthly budgets.':'Set monthly spending limits and watch your progress automatically.'}</p><div class="progress"><span style="width:${bpct}%;background:${bpct>95?'#df806d':'#278a6c'}"></span></div><div class="budget-summary"><span>${fmt(spentMinor,state.currency)} spent</span><span>${fmt(budgetMinor,state.currency)} budget</span></div></div><button class="secondary" style="margin-top:16px;width:100%" onclick="nav('budgets')">View my budgets ${icon('arrow',14)}</button></section></div>`;}
-function transactions(){let list=[...state.transactions].sort((a,b)=>b.occurredAt-a.occurredAt).filter(t=>t.currency===state.currency && (filter==='all'||t.direction===filter) && (`${t.merchant} ${t.category} ${t.source}`.toLowerCase().includes(query.toLowerCase())));let groups={};list.forEach(t=>{let d=new Date(t.occurredAt).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});(groups[d]||(groups[d]=[])).push(t);});
+function transactions(){let list=[...state.transactions].filter(t=>t&&typeof t==='object').sort((a,b)=>txSortKey(b)-txSortKey(a)).filter(t=>t.currency===state.currency && (filter==='all'||t.direction===filter) && (`${t.merchant} ${t.category} ${t.source}`.toLowerCase().includes(query.toLowerCase())));let groups={};list.forEach(t=>{let d=new Date(t.occurredAt).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});(groups[d]||(groups[d]=[])).push(t);});
  return `${heading('EVERY MOVEMENT MATTERS','Transactions','Every expense and every deposit, all in one place.')}${demoNotice()}<section class="panel"><div class="panel-heading"><div><h2>All transactions</h2><p>${list.length} ${list.length===1?'transaction':'transactions'} in ${state.currency}</p></div><div style="display:flex;gap:12px;flex-wrap:wrap"><button class="mini-link" onclick="chooseImportCsv()">${icon('plus',14)} Import CSV</button><button class="mini-link" onclick="exportCsv()">${icon('download',14)} Export CSV</button><button class="mini-link" onclick="chooseImportJson()">${icon('plus',14)} Import JSON</button><button class="mini-link" onclick="exportJson()">${icon('download',14)} Export JSON</button></div></div><div class="toolbar"><div class="searchbox">${icon('search')}<input aria-label="Search transactions" placeholder="Search merchants or categories..." value="${h(query)}" oninput="setQuery(this.value)"></div><div class="filter-tabs" aria-label="Transaction filters">${[['all','All'],['expense','Expenses'],['income','Income']].map(([id,label])=>`<button class="${filter===id?'active':''}" onclick="setFilter('${id}')">${label}</button>`).join('')}</div></div>${list.length?Object.entries(groups).map(([date,items])=>`<div class="table-group">${h(date)}</div>${items.map(singleTx).join('')}`).join(''):empty('No matching transactions','Try another search or add your first transaction.')}</section>${otherCurrencySection()}`;}
 function setQuery(q){query=q;let pos=0;render();let inp=document.querySelector('.searchbox input');if(inp){inp.focus();inp.setSelectionRange(q.length,q.length);}}
 function setFilter(f){filter=f;render();}
-function insights(){let curr=monthTx(),s=txStats(curr),parts=catTotals(curr),total=s.expense,max=parts.length?parts[0][1]:1,months=Array.from({length:6},(_,i)=>{let d=new Date();d.setMonth(d.getMonth()-(5-i));let list=state.transactions.filter(t=>{let x=new Date(t.occurredAt);return x.getMonth()===d.getMonth()&&x.getFullYear()===d.getFullYear()&&t.currency===state.currency;});return {label:d.toLocaleDateString('en-US',{month:'short'}),...txStats(list)};});let maxMonthly=Math.max(1,...months.map(x=>Math.max(x.income,x.expense)));
+function insights(){let curr=monthTx(),s=txStats(curr),parts=catTotals(curr),total=s.expense,max=parts.length?parts[0][1]:1,months=Array.from({length:6},(_,i)=>{let d=new Date();d.setMonth(d.getMonth()-(5-i));let list=state.transactions.filter(t=>{if(!t||typeof t!=='object')return false;const x=txWhen(t.occurredAt);return Number.isFinite(x.getTime())&&x.getMonth()===d.getMonth()&&x.getFullYear()===d.getFullYear()&&t.currency===state.currency;});return {label:d.toLocaleDateString('en-US',{month:'short'}),...txStats(list)};});let maxMonthly=Math.max(1,...months.map(x=>Math.max(x.income,x.expense)));
  return `${heading('UNDERSTAND THE BIG PICTURE','Financial insights','Look beyond transactions. Find the patterns that matter.')}${demoNotice()}<div class="metrics">${metric('Total income',s.income,'in','Current calendar month',true)}${metric('Total expenses',s.expense,'out','Current calendar month')}${`<div class="metric"><div class="metric-top"><span>Savings rate</span><span class="metric-icon">${icon('chart',17)}</span></div><div class="metric-amount">${s.income?Math.round(s.net/s.income*100)+'%':'—'}</div><div class="metric-sub">${s.income?'Net cash flow as a share of income':'Add income to calculate'}</div></div>`}</div><div class="insights-grid"><section class="panel"><div class="panel-heading"><div><h2>Six-month comparison</h2><p>See your income and expenses side by side</p></div></div><div style="display:flex;gap:11px;align-items:flex-end;height:203px;padding-top:14px;border-bottom:1px solid #ecf1ec">${months.map(m=>`<div style="flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px"><div style="flex:1;width:100%;display:flex;gap:4px;align-items:flex-end;justify-content:center"><div title="Income ${h(fmt(m.income,state.currency))}" style="height:${Math.max(m.income?3:0,m.income/maxMonthly*100)}%;width:31%;background:#c3e6b1;border-radius:6px 6px 0 0"></div><div title="Expenses ${h(fmt(m.expense,state.currency))}" style="height:${Math.max(m.expense?3:0,m.expense/maxMonthly*100)}%;width:31%;background:#148568;border-radius:6px 6px 0 0"></div></div><span style="font-size:10px;color:#9cab9f">${m.label}</span></div>`).join('')}</div><div class="chart-legend" style="padding-top:13px"><span><i class="legend-dot" style="background:#c3e6b1"></i> Income</span><span><i class="legend-dot" style="background:#148568"></i> Expenses</span></div></section><section class="panel"><div class="panel-heading"><div><h2>Expense categories</h2><p>Your biggest areas of spending</p></div></div>${parts.length?parts.map(([cat,v])=>`<div class="category-bar"><div class="category-bar-title"><b>${h(cat)}</b><span>${fmt(v,state.currency)}</span></div><div class="progress"><span style="width:${v/max*100}%;background:${COLORS[cat]||'#91ab95'}"></span></div></div>`).join(''):empty('No categories yet','Your breakdown will appear here.')}</section></div><div class="panel" style="margin-top:20px"><div class="panel-heading"><div><h2>A helpful distinction</h2><p>Cash flow is not the same as your bank balance.</p></div>${icon('info',19)}</div><p style="font-size:12px;line-height:1.7;color:#7e9186;margin:0">Folio calculates income minus expenses for recorded transactions. It cannot know your current bank balance without an opening balance or direct account connection. Multiple currencies are never silently added together.</p></div>`;}
 function budgets(){let parts=catTotals(monthTx()), keys=Object.keys(currentBudgets()),spentMap=Object.fromEntries(parts);let totalLimit=keys.reduce((s,k)=>s+(Number.isFinite(Number(currentBudgets()[k]))?Number(currentBudgets()[k]):0),0),totalSpent=keys.reduce((s,k)=>s+(Number(spentMap[k])||0),0);
  return `${heading('YOUR SPENDING GUARDRAILS','Monthly budgets','Give every category room to breathe.')}${demoNotice()}${otherBudgetNote()}${state.monthlyBudgetMinor>0?`<div class="v2-planning-banner"><span>Overall spending target</span><strong>${fmt(state.monthlyBudgetMinor,state.currency)} / month</strong><small>${fmt(state.monthlyBudgetMinor-txStats(monthTx()).expense,state.currency)} remaining after all recorded expenses. To change it, tell Ask Folio your new monthly budget.</small><button class="v2-plan-edit" onclick="nav('assistant')">Edit with Folio →</button></div>`:''}<div class="metrics">${metric('Total budget',totalLimit,'net','Across all planned categories',true)}${metric('Budgeted spending',totalSpent,'out','Spent in budgeted categories')}${metric('Budget remaining',Math.max(0,totalLimit-totalSpent),'in','Left for the current month')}</div><div class="panel"><div class="panel-heading"><div><h2>Category budgets</h2><p>Adjust your spending limits whenever you like</p></div><button class="secondary" onclick="showBudget()">${icon('plus',15)} Set a budget</button></div>${keys.length?`<div class="budget-lines">${keys.map(cat=>{let limit=Number(currentBudgets()[cat]),spent=Number(spentMap[cat])||0,pct=limit?Math.min(100,spent/limit*100):0;return `<div class="budget-line"><div class="tr-icon">${icon(catIcon(cat))}</div><div class="budget-line-content"><div class="budget-line-head"><strong>${h(cat)}</strong><small>${fmt(spent,state.currency)} / ${fmt(limit,state.currency)}</small></div><div class="progress"><span style="width:${pct}%;background:${spent>limit?'#e68074':COLORS[cat]||'#328c79'}"></span></div></div><button class="iconbtn" style="width:33px;height:33px;flex-shrink:0" title="Edit budget" onclick="showBudget('${h(cat)}')">${icon('edit',15)}</button></div>`;}).join('')}</div>`:empty('No budgets yet','Set your first category budget to manage spending.')}</div>`;}
-function settings(){let sources=state.sources||[],permitted=native()?permissionStatus:false;return `${heading('YOUR SPACE, YOUR RULES','Settings & privacy','Control how Folio tracks, stores and displays your finances.')}${demoNotice()}${trackingPanel()}<div class="settings-stack"><section class="setting-section"><h2 class="setting-title">Automatic transaction capture</h2><p class="setting-description">Allow Folio to recognize supported financial notifications from the apps you choose. Raw notification messages are not stored.</p><div class="setting-row"><div><strong>Notification monitoring</strong><span>Only transactions from approved sources are processed on your device.</span></div><button aria-label="Toggle automatic capture" class="switch ${state.capture?'on':''}" role="switch" aria-checked="${state.capture}" onclick="toggleCapture()"></button></div><div class="setting-row"><div><strong>Android notification access</strong><span>${native()?'Grant Android system access before importing bank alerts.':'Notification access works in the installed Android app, not the browser preview.'}</span><div class="status-line ${permitted?'success':''}"><i class="dot"></i>${native()?(permitted?'Permission granted':'Permission not granted'):'Browser preview only'}</div></div><button class="secondary" ${!native()?'disabled':''} onclick="grantAccess()">${permitted?'Manage access':'Allow access'}</button></div><div class="setting-row" style="display:block"><strong style="margin-bottom:5px">Approved notification sources</strong><span style="max-width:none">Enter Android app package IDs, separated by commas. Examples for Google Messages and Samsung Messages are already added. You can include your bank’s app package ID.</span><textarea id="sourceInput" class="textinput" rows="2" style="margin-top:12px;resize:vertical">${h(sources.join(', '))}</textarea><div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" onclick="saveSources()">Save approved apps</button></div><p class="hint">For privacy, no other app’s notifications are parsed. Finances from notifications may need manual correction.</p></div></section><section class="setting-section"><h2 class="setting-title">Preferences</h2><p class="setting-description">Tailor the display to your financial life.</p><div class="setting-row"><div><strong>Reporting currency</strong><span>Only transactions in this currency enter totals; no automatic conversion is performed.</span></div><select aria-label="Reporting currency" onchange="setCurrency(this.value)">${['EGP','USD','SAR','AED','EUR','GBP'].map(c=>`<option ${state.currency===c?'selected':''}>${c}</option>`).join('')}</select></div></section><section class="setting-section"><h2 class="setting-title">Your data stays yours</h2><p class="setting-description">Stored locally on your device. No account, backend, third-party analytics or network permissions required.</p><div class="setting-row"><div><strong>Export transactions (CSV)</strong><span>A spreadsheet of transactions only. Balances, budgets and settings are not included. This is what older Folio builds can import.</span></div><button class="secondary" onclick="exportCsv()">${icon('download',15)} Export CSV</button></div><div class="setting-row"><div><strong>Full JSON backup</strong><span>Transactions, category budgets, reported balance, expected salary, monthly target, currency, allowlist and onboarding state.</span></div><button class="secondary" onclick="exportJson()">${icon('download',15)} Export JSON</button></div><div class="setting-row"><div><strong>Restore a backup</strong><span>Import CSV adds transactions and keeps everything else. Import JSON replaces this device's Folio data after saving a local snapshot.</span></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="chooseImportCsv()">Import CSV</button><button class="secondary" onclick="chooseImportJson()">Import JSON</button></div></div><div class="setting-row"><div><strong>${state.demo?'Start tracking real money':'Delete all financial records'}</strong><span>${state.demo?'Permanently dismiss sample transactions and start with an empty workspace.':'Clear transaction history and budgets on this device. Cannot be undone.'}</span></div><button class="secondary ${state.demo?'':'danger'}" onclick="${state.demo?'startLive()':'clearAll()'}">${state.demo?'Start now':'Delete data'}</button></div></section><section class="setting-section" style="background:#f0f8f2"><div style="display:flex;gap:14px;align-items:flex-start"><div class="metric-icon">${icon('shield',20)}</div><div><h2 class="setting-title">Designed to respect your privacy</h2><p class="setting-description" style="margin:0">Folio only processes allowlisted sources after you opt in. The recognition is rule-based and completely offline. Imported transactions can be edited or deleted at any time.</p></div></div></section></div>`;}
+function settings(){let sources=Array.isArray(state.sources)?state.sources:[],permitted=native()?permissionStatus:false;return `${heading('YOUR SPACE, YOUR RULES','Settings & privacy','Control how Folio tracks, stores and displays your finances.')}${demoNotice()}${trackingPanel()}<div class="settings-stack"><section class="setting-section"><h2 class="setting-title">Automatic transaction capture</h2><p class="setting-description">Allow Folio to recognize supported financial notifications from the apps you choose. Raw notification messages are not stored.</p><div class="setting-row"><div><strong>Notification monitoring</strong><span>Only transactions from approved sources are processed on your device.</span></div><button aria-label="Toggle automatic capture" class="switch ${state.capture?'on':''}" role="switch" aria-checked="${state.capture}" onclick="toggleCapture()"></button></div><div class="setting-row"><div><strong>Android notification access</strong><span>${native()?'Grant Android system access before importing bank alerts.':'Notification access works in the installed Android app, not the browser preview.'}</span><div class="status-line ${permitted?'success':''}"><i class="dot"></i>${native()?(permitted?'Permission granted':'Permission not granted'):'Browser preview only'}</div></div><button class="secondary" ${!native()?'disabled':''} onclick="grantAccess()">${permitted?'Manage access':'Allow access'}</button></div><div class="setting-row" style="display:block"><strong style="margin-bottom:5px">Approved notification sources</strong><span style="max-width:none">Enter Android app package IDs, separated by commas. Examples for Google Messages and Samsung Messages are already added. You can include your bank’s app package ID.</span><textarea id="sourceInput" class="textinput" rows="2" style="margin-top:12px;resize:vertical">${h(sources.join(', '))}</textarea><div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" onclick="saveSources()">Save approved apps</button></div><p class="hint">For privacy, no other app’s notifications are parsed. Finances from notifications may need manual correction.</p></div></section><section class="setting-section"><h2 class="setting-title">Preferences</h2><p class="setting-description">Tailor the display to your financial life.</p><div class="setting-row"><div><strong>Reporting currency</strong><span>Only transactions in this currency enter totals; no automatic conversion is performed.</span></div><select aria-label="Reporting currency" onchange="setCurrency(this.value)">${['EGP','USD','SAR','AED','EUR','GBP'].map(c=>`<option ${state.currency===c?'selected':''}>${c}</option>`).join('')}</select></div></section><section class="setting-section"><h2 class="setting-title">Your data stays yours</h2><p class="setting-description">Stored locally on your device. No account, backend, third-party analytics or network permissions required.</p><div class="setting-row"><div><strong>Export transactions (CSV)</strong><span>A spreadsheet of transactions only. Balances, budgets and settings are not included. This is what older Folio builds can import.</span></div><button class="secondary" onclick="exportCsv()">${icon('download',15)} Export CSV</button></div><div class="setting-row"><div><strong>Full JSON backup</strong><span>Transactions, category budgets, reported balance, expected salary, monthly target, currency, allowlist and onboarding state.</span></div><button class="secondary" onclick="exportJson()">${icon('download',15)} Export JSON</button></div><div class="setting-row"><div><strong>Restore a backup</strong><span>Import CSV adds transactions and keeps everything else. Import JSON replaces this device's Folio data after saving a local snapshot.</span></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="chooseImportCsv()">Import CSV</button><button class="secondary" onclick="chooseImportJson()">Import JSON</button></div></div><div class="setting-row"><div><strong>${state.demo?'Start tracking real money':'Delete all financial records'}</strong><span>${state.demo?'Permanently dismiss sample transactions and start with an empty workspace.':'Clear transaction history and budgets on this device. Cannot be undone.'}</span></div><button class="secondary ${state.demo?'':'danger'}" onclick="${state.demo?'startLive()':'clearAll()'}">${state.demo?'Start now':'Delete data'}</button></div></section><section class="setting-section" style="background:#f0f8f2"><div style="display:flex;gap:14px;align-items:flex-start"><div class="metric-icon">${icon('shield',20)}</div><div><h2 class="setting-title">Designed to respect your privacy</h2><p class="setting-description" style="margin:0">Folio only processes allowlisted sources after you opt in. The recognition is rule-based and completely offline. Imported transactions can be edited or deleted at any time.</p></div></div></section></div>`;}
 function render(){if(window.FolioV2)return window.FolioV2.render();document.getElementById('root').innerHTML=shell(({overview,transactions,insights,budgets,settings})[page]());}
 function dateInputValue(time){let d=new Date(time);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function showTransaction(id=null){let t=state.transactions.find(x=>x.id===id);currentEdit=id;modalType=t?.direction||'expense';let today=dateInputValue(Date.now());
@@ -678,7 +737,7 @@ function chooseImportCsv(){
  input.click();
 }
 
-function exportCsv(){const quote=s=>'"'+String(s??'').replace(/"/g,'""')+'"';let rows=[['Date','Direction','Merchant','Category','Amount','Currency','Source','Source package'],...state.transactions.map(t=>[new Date(t.occurredAt).toISOString().slice(0,10),t.direction,t.merchant,t.category,(t.amountMinor/100).toFixed(2),t.currency,t.source,t.sourcePackage||''])];let csv=rows.map(r=>r.map(quote).join(',')).join('\r\n');if(native()){try{FolioNative.shareCsv(csv);return;}catch(e){}}let a=document.createElement('a'),url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.href=url;a.download='folio-transactions.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);notify('Export prepared');}
+function exportCsv(){const quote=s=>'"'+String(s??'').replace(/"/g,'""')+'"';let skipped=0;const body=[];for(const t of state.transactions){if(!t||typeof t!=='object'){skipped++;continue;}const when=FolioData.transactionTime(t.occurredAt);const amount=Number(t.amountMinor);if(when==null||!Number.isFinite(amount)){skipped++;continue;}body.push([new Date(when).toISOString().slice(0,10),t.direction,t.merchant,t.category,(amount/100).toFixed(2),t.currency,t.source,t.sourcePackage||'']);}let rows=[['Date','Direction','Merchant','Category','Amount','Currency','Source','Source package'],...body];let csv=rows.map(r=>r.map(quote).join(',')).join('\r\n');if(native()){try{FolioNative.shareCsv(csv);return;}catch(e){}}let a=document.createElement('a'),url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.href=url;a.download='folio-transactions.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);notify(skipped?`Export prepared. ${skipped} incomplete row${skipped===1?' was':'s were'} left out of the CSV and remain in Folio.`:'Export prepared');}
 function refreshNative(){if(!native())return;try{const oldPermission=permissionStatus;permissionStatus=FolioNative.notificationAccessGranted();let gotNew=false;const before=JSON.stringify(captureDiagnostics)+'|'+observedSources.join(',');try{captureDiagnostics=JSON.parse(FolioNative.getCaptureDiagnostics());observedSources=JSON.parse(FolioNative.getObservedSources());}catch(e){}if(!state.demo){const events=JSON.parse(FolioNative.getPendingTransactions());let known=new Set(state.transactions.map(t=>t.id)),received=[];for(let x of events){if(!x||typeof x!=='object'){state.legacyQueue=state.legacyQueue||[];state.legacyQueue.push(x==null?null:{legacyRaw:String(x)});continue;}const dup=state.transactions.some(t=>t&&(t.id===x.id||(x.dedupKey&&t.dedupKey===x.dedupKey&&Math.abs(Number(t.occurredAt)-Number(x.occurredAt))<=90000)));if(dup||known.has(x.id))continue;const amount=Number(x.amountMinor);if(Number.isFinite(amount)&&amount>0&&['income','expense'].includes(x.direction)){state.transactions.push(x);known.add(x.id);received.push(x.id);continue;}state.legacyQueue=state.legacyQueue||[];state.legacyQueue.push(x);}if(events.length){if(persist())FolioNative.ackTransactions(JSON.stringify(events.map(t=>t.id)));if(received.length){gotNew=true;notify(`${received.length} new transaction${received.length===1?'':'s'} imported`);}} }if(gotNew||(page==='settings'&&oldPermission!==permissionStatus)||(page==='overview'&&(oldPermission!==permissionStatus||before!==JSON.stringify(captureDiagnostics)+'|'+observedSources.join(','))))render();}catch(e){console.error('Native import error',e);}}
 window.folioNativeRefresh=refreshNative;
 if(native())try{state.capture=FolioNative.captureEnabled();state.sources=JSON.parse(FolioNative.getSourcePackages());}catch(e){}
