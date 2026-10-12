@@ -29,4 +29,5 @@ Downloaded the public release asset and read the zip. It is v2-only: no v1 JAR s
 ## Not done
 
 - No emulator install of v0.2.33, no data entry on a device, and no upgrade to this build. This environment has no Android SDK image and no release keystore. Details are in `docs/release/data-migration.md` and `docs/testing/test-results.md`.
-- The signed release APK is produced on the main CI workflow, which has the keystore secrets. A pull request compiles an unsigned release and runs the unit tests.
+- The signed release APK is produced on the main CI workflow, which has the keystore secrets. Pull request CI compiled an unsigned release and passed the unit tests. `apksigner verify` for v1, v2, and v3 did not run on that pull request.
+- Headless Chrome opened the bundled page: onboarding rendered, EGP and SAR stayed separate, budgets displayed as major currency from minor units, and JSON backup restored the workspace. There was still no emulator upgrade.

@@ -26,6 +26,20 @@ node tests/v2.test.cjs
 
 All five exited 0. No failures.
 
+Pull request CI run [38211643821](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38211643821) on `73713b4` passed the same five checks and `android/gradlew -p android assembleRelease` without signing secrets. The signed identity, v1/v2/v3 `apksigner`, and zipalign steps are skipped on pull requests.
+
+## Headless Chrome — bundled page
+
+`google-chrome --headless` loaded `file:///android_asset/index.html` (the asset path on disk). The strict CSP meta tag was present and both inline scripts ran (`FolioData` and `FolioV2` were defined). The first screen was onboarding step 1 of 4, "Meet Folio."
+
+With a schema 1 workspace (EGP food budget 350000 minor, SAR shopping budget 250000 minor, Talabat EGP 19.99, Jarir SAR 86.50, reported balance, salary, and onboarding set):
+
+- Overview showed money out as EGP 19.99 and the note "Not added into EGP totals. SAR in SAR 0, out SAR 86.50".
+- Budgets showed EGP 3,500 for Food & drinks and EGP 9,000 for the monthly target, plus "Budgets in SAR are stored separately".
+- Transactions exposed Import CSV, Export CSV, Import JSON, and Export JSON. A merchant of `<img src=x onerror=alert(1)>` was escaped.
+- Settings described CSV as transactions only and JSON as the full workspace.
+- `FolioData.buildBackup` / `restoreBackup` kept balance 421000, salary 2000000, both budgets, `com.stc.pay`, capture, and onboarding. The older CSV header imported Carrefour as 125000 minor units.
+
 `ParserTest` includes the original 14 cases plus synthetic CIB, NBE, Banque Misr, Vodafone Cash, InstaPay, Al Rajhi, STC Pay, SNB, and Alinma samples (English and Arabic). They are labeled synthetic in the test source. `money.test.cjs` covers schema 1 budget conversion, a second migration that does not multiply again, incomplete rows, mixed-currency totals, full JSON round trip, and the older CSV shapes. `ui.test.cjs` covers escaped notification text, JSON restore of balance, salary, budgets, allowlist and onboarding, the versionCode floor, and that the inlined page matches `folio-data.js`, `folio-v2.js`, and `folio-v2.css`.
 
 ## v0.2.33 APK inspection (not an install)
