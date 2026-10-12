@@ -1085,7 +1085,8 @@
     if (result.status === 'shortfall') text += ' The runway is short by ' + formatMoney(-result.safe_to_spend_minor, result.currency) + '.';
     text += ' Projected payday income was not added to available now.';
     if (result.unconfirmed_transactions && result.unconfirmed_transactions.length) {
-      text += ' Unconfirmed notification transactions are excluded from that number.';
+      var pendingCount = typeof result.unconfirmed_count === 'number' ? result.unconfirmed_count : result.unconfirmed_transactions.length;
+      text += ' Unconfirmed notification transactions (' + pendingCount + ') are excluded from that number.';
       if (typeof result.unconfirmed_net_minor === 'number') text += ' Shown separately, their net is ' + formatMoney(result.unconfirmed_net_minor, result.currency) + '.';
     }
     if (cost) {

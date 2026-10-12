@@ -73,26 +73,27 @@ check('complete runway keeps payday income out and returns per-day remainder', (
     emergencyBufferMinor: 25000
   }));
   assert.equal(result.status, 'ok');
-  assert.equal(result.safe_to_spend_minor, 50000);
+  assert.equal(result.safe_to_spend_minor, 35000);
   assert.equal(result.days, 14);
   assert.equal(result.calendar_days, 14);
-  assert.equal(result.per_day_minor, 3571);
-  assert.equal(result.remainder_minor, 6);
+  assert.equal(result.per_day_minor, 2500);
+  assert.equal(result.remainder_minor, 0);
   assert.equal(result.currency, 'EGP');
   assert.deepEqual(result.missing, []);
-  assert.equal(includedSum(result), 50000);
+  assert.equal(includedSum(result), 35000);
   assert.equal(result.breakdown.find(row => row.id === 'planned_payday').included, false);
   assert.equal(result.breakdown.find(row => row.id === 'planned_payday').amount_minor, 900000);
   assert.notEqual(result.safe_to_spend_minor, 50000 + 900000);
-  assert.deepEqual(result.bills_due.map(row => row.id), ['arrears', 'circle', 'phone-1', 'rent']);
+  assert.deepEqual(result.bills_due.map(row => row.id), ['arrears', 'circle', 'phone-1', 'rent', 'payday-bill']);
   assert.ok(result.excluded.some(row => row.reason === 'other_currency' && row.amount_minor === 99999));
-  assert.ok(result.excluded.some(row => row.reason === 'due_on_payday' && row.id === 'payday-bill'));
+  assert.equal(result.bills_due.some(row => row.id === 'payday-bill'), true);
   assert.ok(result.excluded.some(row => row.reason === 'due_after_payday' && row.id === 'phone-2'));
   assert.ok(result.excluded.some(row => row.reason === 'transfer' && row.id === 'move'));
   assert.ok(result.excluded.some(row => row.reason === 'before_snapshot' && row.count === 1));
   assert.ok(result.excluded.some(row => row.reason === 'at_snapshot' && row.count === 1));
   assert.equal(result.payday.included, false);
-  assert.equal(result.available_now_minor, 50000);
+  assert.equal(result.available_now_minor, 35000);
+  assert.equal(result.unconfirmed_count, 1);
   assert.equal(result.unconfirmed_net_minor, -7777);
   assert.equal(result.unconfirmed_transactions[0].id, 'pending');
   assert.equal(result.breakdown.find(row => row.id === 'unconfirmed_notifications').included, false);
@@ -117,8 +118,8 @@ check('negative runway is preserved', () => {
   assert.equal(result.status, 'shortfall');
   assert.equal(result.safe_to_spend_minor, -30000);
   assert.notEqual(result.safe_to_spend_minor, 0);
-  assert.equal(result.per_day_minor, -2142);
-  assert.equal(result.remainder_minor, -12);
+  assert.equal(result.per_day_minor, -2143);
+  assert.equal(result.remainder_minor, 2);
   assert.ok(result.safe_to_spend_minor < 0);
 });
 
@@ -128,20 +129,18 @@ check('a negative snapshot is data, not a missing balance', () => {
   assert.equal(result.safe_to_spend_minor, -500);
 });
 
-check('payday today uses one day and does not subtract bills due today', () => {
+check('payday today is insufficient data', () => {
   const result = R.evaluate(base({
     paydayDate: '2026-10-12',
     reportedBalanceMinor: 5000,
     commitments: [commit('today', 'subscription', 1000, '2026-10-12')]
   }));
-  assert.equal(result.status, 'ok');
-  assert.equal(result.calendar_days, 0);
-  assert.equal(result.days, 1);
-  assert.equal(result.safe_to_spend_minor, 5000);
-  assert.equal(result.per_day_minor, 5000);
+  assert.equal(result.status, 'insufficient data');
+  assert.equal(result.safe_to_spend_minor, null);
+  assert.equal(result.per_day_minor, null);
+  assert.equal(result.days, null);
   assert.equal(result.payday.is_today, true);
-  assert.equal(result.bills_due.length, 0);
-  assert.equal(result.excluded.find(row => row.id === 'today').reason, 'due_on_payday');
+  assert.ok(result.missing.indexOf('payday_today') >= 0);
 });
 
 check('a payday that already passed is insufficient data', () => {
@@ -152,15 +151,15 @@ check('a payday that already passed is insufficient data', () => {
   assert.ok(result.missing.indexOf('payday_passed') >= 0);
 });
 
-check('a snapshot exactly N days old is still fresh', () => {
-  const result = R.evaluate(base({ balanceReportedAt: NOW - 7 * DAY }));
+check('a snapshot exactly 48 hours old is still fresh', () => {
+  const result = R.evaluate(base({ balanceReportedAt: NOW - R.STALE_AFTER_MS }));
   assert.equal(result.status, 'ok');
   assert.equal(result.safe_to_spend_minor, 250000);
   assert.deepEqual(result.missing, []);
 });
 
-check('a snapshot older than N days is stale', () => {
-  const result = R.evaluate(base({ balanceReportedAt: NOW - 7 * DAY - 1 }));
+check('a snapshot older than 48 hours is stale', () => {
+  const result = R.evaluate(base({ balanceReportedAt: NOW - R.STALE_AFTER_MS - 1 }));
   assert.equal(result.status, 'insufficient data');
   assert.equal(result.safe_to_spend_minor, null);
   assert.ok(result.missing.indexOf('stale_snapshot') >= 0);
@@ -347,20 +346,20 @@ check('an installment schedule subtracts only the part before payday and ignores
       ]
     }]
   }));
-  assert.equal(result.safe_to_spend_minor, 249000);
-  assert.deepEqual(result.bills_due.map(row => row.id), ['1']);
+  assert.equal(result.safe_to_spend_minor, 248000);
+  assert.deepEqual(result.bills_due.map(row => row.id), ['1', '2']);
   assert.equal(JSON.stringify(result.breakdown.filter(row => row.included)).includes('100000'), false);
 });
 
-check("gam'eya pay-in on payday is not subtracted", () => {
+check("gam'eya pay-in on payday is reserved", () => {
   const result = R.evaluate(base({
     commitments: [
       commit('soon', "gam'eya", 7000, '2026-10-13', { flow: 'pay-in' }),
       commit('day', "gam'eya", 7000, '2026-10-26', { flow: 'pay-in' })
     ]
   }));
-  assert.equal(result.safe_to_spend_minor, 243000);
-  assert.equal(result.excluded.find(row => row.id === 'day').reason, 'due_on_payday');
+  assert.equal(result.safe_to_spend_minor, 236000);
+  assert.deepEqual(result.bills_due.map(row => row.id), ['soon', 'day']);
 });
 
 check("an unreceived gam'eya payout and its pot stay out of available now", () => {
@@ -477,7 +476,7 @@ check('snake_case aliases and a paid commitment are honored', () => {
     payday_amount_minor: 1,
     payday_currency: 'EGP',
     commitments: [
-      { id: 'paid', title: 'Power', kind: 'utility', amount_minor: 9000, currency: 'EGP', due_at: Date.parse('2026-10-18T12:00:00.000Z'), status: 'paid', confirmed: true },
+      { id: 'paid', title: 'Power', kind: 'utility', amount_minor: 9000, currency: 'EGP', due_at: Date.parse('2026-10-18T12:00:00.000Z'), status: 'paid', paid_at: SNAP - 1000, confirmed: true },
       { id: 'circle', title: 'Circle', kind: 'gameya', amount_minor: 1000, currency: 'EGP', due: '2026-10-16', paid: false, confirmed: true, flow: 'pay-in' }
     ],
     savings_reserved_minor: 0,
@@ -560,9 +559,10 @@ check('the same UTC instant is already 1 March in Cairo', () => {
     paydayDate: '2026-03-01'
   }));
   assert.equal(R.cairoParts(now).iso, '2026-03-01');
-  assert.equal(result.calendar_days, 0);
-  assert.equal(result.days, 1);
+  assert.equal(result.status, 'insufficient data');
+  assert.equal(result.safe_to_spend_minor, null);
   assert.equal(result.payday.is_today, true);
+  assert.ok(result.missing.indexOf('payday_today') >= 0);
 });
 
 check('31 January to 1 February is one day', () => {
@@ -604,8 +604,10 @@ check('Cairo spring-forward makes 24 April start at 01:00', () => {
   const dayBefore = R.evaluate(base({ now: before, balanceReportedAt: before - DAY, paydayDate: '2026-04-24' }));
   const onDay = R.evaluate(base({ now: after, balanceReportedAt: after - DAY, paydayDate: '2026-04-24' }));
   assert.equal(dayBefore.calendar_days, 1);
-  assert.equal(onDay.calendar_days, 0);
-  assert.equal(onDay.days, 1);
+  assert.equal(onDay.status, 'insufficient data');
+  assert.equal(onDay.safe_to_spend_minor, null);
+  assert.equal(onDay.payday.is_today, true);
+  assert.ok(onDay.missing.indexOf('payday_today') >= 0);
 });
 
 check('Cairo fall-back repeats the late hour on the last Thursday of October', () => {
@@ -749,6 +751,78 @@ check('the same input is deterministic and is not mutated', () => {
   assert.equal(first.safe_to_spend_minor, 249985);
 });
 
+check('a confirmed transaction after now is not available money', () => {
+  const futureExpense = R.evaluate(base({
+    transactions: [{ id: 'later', amountMinor: 10000, currency: 'EGP', direction: 'expense', status: 'confirmed', occurredAt: NOW + 60 * 60 * 1000 }]
+  }));
+  assert.equal(futureExpense.status, 'insufficient data');
+  assert.equal(futureExpense.safe_to_spend_minor, null);
+  assert.equal(futureExpense.available_now_minor, null);
+  assert.ok(futureExpense.missing.indexOf('future_transaction') >= 0);
+  const futureIncome = R.evaluate(base({
+    transactions: [{ id: 'salary-soon', amountMinor: 50000, currency: 'EGP', direction: 'income', status: 'confirmed', occurredAt: NOW + 2 * DAY }]
+  }));
+  assert.equal(futureIncome.safe_to_spend_minor, null);
+  assert.equal(futureIncome.available_now_minor, null);
+  assert.ok(futureIncome.missing.indexOf('future_transaction') >= 0);
+});
+
+check('a bill paid after the snapshot without a matching debit is not treated as gone', () => {
+  const paidAt = SNAP + 30 * 60 * 1000;
+  const flagged = R.evaluate(base({
+    commitments: [commit('rent', 'rent', 20000, '2026-10-15', { status: 'paid', paid: true, paidAt: paidAt })]
+  }));
+  assert.equal(flagged.status, 'insufficient data');
+  assert.equal(flagged.safe_to_spend_minor, null);
+  assert.ok(flagged.missing.indexOf('unreconciled_paid_commitment') >= 0);
+  assert.equal(flagged.excluded.find(row => row.id === 'rent').reason, 'unreconciled_paid_commitment');
+  const settled = R.evaluate(base({
+    commitments: [commit('rent', 'rent', 20000, '2026-10-15', { paid: true, status: 'paid', paidAt: SNAP - 1000 })]
+  }));
+  assert.equal(settled.status, 'ok');
+  assert.equal(settled.safe_to_spend_minor, 250000);
+  assert.equal(settled.excluded.find(row => row.id === 'rent').reason, 'paid');
+  const linked = R.evaluate(base({
+    transactions: [{ id: 'rentPaid', amountMinor: 20000, currency: 'EGP', direction: 'expense', status: 'confirmed', occurredAt: paidAt }],
+    commitments: [commit('rent', 'rent', 20000, '2026-10-15', { paid: true, status: 'paid', paidAt: paidAt, linkedPaymentIds: ['rentPaid'] })]
+  }));
+  assert.equal(linked.status, 'ok');
+  assert.equal(linked.safe_to_spend_minor, 230000);
+  assert.equal(linked.excluded.find(row => row.id === 'rent').reason, 'already_in_ledger');
+});
+
+check('negative per-day uses floor', () => {
+  const result = R.evaluate(base({
+    reportedBalanceMinor: -100001,
+    paydayDate: '2026-10-17'
+  }));
+  assert.equal(result.safe_to_spend_minor, -100001);
+  assert.equal(result.days, 5);
+  assert.equal(result.per_day_minor, -20001);
+  assert.equal(result.per_day_minor, Math.floor(-100001 / 5));
+});
+
+check('an unconfirmed notification stays out of the number and is counted', () => {
+  const result = R.evaluate(base({
+    transactions: [{ id: 'pending', amountMinor: 25000, currency: 'EGP', direction: 'expense', status: 'suggested', occurredAt: SNAP + 1000 }]
+  }));
+  assert.equal(result.status, 'ok');
+  assert.equal(result.safe_to_spend_minor, 250000);
+  assert.equal(result.unconfirmed_count, 1);
+  assert.equal(result.unconfirmed_net_minor, -25000);
+  assert.equal(result.breakdown.find(row => row.id === 'unconfirmed_notifications').included, false);
+});
+
+check('another currency is excluded from this runway and noted', () => {
+  const result = R.evaluate(base({
+    transactions: [{ id: 'usd', amountMinor: 10000, currency: 'USD', direction: 'expense', status: 'confirmed', occurredAt: SNAP + 1000 }]
+  }));
+  assert.equal(result.status, 'ok');
+  assert.equal(result.safe_to_spend_minor, 250000);
+  assert.equal(result.excluded.find(row => row.id === 'usd').reason, 'other_currency');
+  assert.equal(result.excluded.find(row => row.id === 'usd').currency, 'USD');
+});
+
 check('the bundled engine stays free of parse-breaking syntax and clocks', () => {
   const src = fs.readFileSync(path.join(__dirname, '../android/app/src/main/assets/payday-runway.js'), 'utf8');
   assert.equal(src.includes('?.'), false);
@@ -758,7 +832,7 @@ check('the bundled engine stays free of parse-breaking syntax and clocks', () =>
   assert.equal(/Date\.now\(/.test(src), false);
   assert.equal(/new Date\(\)/.test(src), false);
   assert.equal(/\bfetch\(/.test(src), false);
-  assert.equal(R.STALE_AFTER_DAYS, 7);
+  assert.equal(R.STALE_AFTER_MS, 48 * 60 * 60 * 1000);
   const context = vm.createContext({});
   vm.runInContext(src, context);
   assert.equal(typeof context.FolioPaydayRunway.evaluate, 'function');

@@ -1424,7 +1424,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
 (function (root) {
   'use strict';
 
-  var STALE_AFTER_DAYS = 7;
+  var STALE_AFTER_MS = 48 * 60 * 60 * 1000;
   var DAY_MS = 86400000;
 
   function isInt(value) {
@@ -1502,8 +1502,11 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return Math.floor(Date.UTC(parts.year, parts.month - 1, parts.day) / DAY_MS);
   }
 
-  function truncDiv(n, d) {
-    return Math.trunc(n / d);
+  /* Floor, including negatives. Truncation would turn -100001/5 into -20000. */
+  function floorDiv(n, d) {
+    var q = Math.trunc(n / d);
+    if (q * d === n || n >= 0) return q;
+    return q - 1;
   }
 
   function addInt(a, b) {
@@ -1578,6 +1581,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       breakdown: [],
       bills_due: [],
       unconfirmed_transactions: side.unconfirmedTransactions || [],
+      unconfirmed_count: (side.unconfirmedTransactions || []).length,
       unconfirmed_net_minor: null,
       unconfirmed_commitments: side.unconfirmedCommitments || [],
       missing: sortCodes(missing),
@@ -1690,6 +1694,21 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return false;
   }
 
+  function paidAtMs(raw) {
+    var found = false;
+    var value = null;
+    var keys = ['paidAt', 'paid_at'];
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      if (!own(raw, keys[i]) || raw[keys[i]] == null || raw[keys[i]] === '') continue;
+      if (!found) { found = true; value = raw[keys[i]]; }
+      else if (value !== raw[keys[i]]) return undefined;
+    }
+    if (!found) return null;
+    if (!isInt(value)) return undefined;
+    return value;
+  }
+
   function linkedToCounted(raw, counted) {
     var ids = raw.linkedPaymentIds || raw.linked_payment_ids;
     if (!Array.isArray(ids)) return false;
@@ -1708,7 +1727,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return fee;
   }
 
-  function considerOne(raw, kind, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments) {
+  function considerOne(raw, kind, currency, paydayYmd, snapshotAt, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments) {
     var id = obligationId(raw);
     if (id != null) {
       if (seenIds[id]) addCode(missing, 'duplicate_obligation');
@@ -1749,17 +1768,29 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       return;
     }
     if (paidState(raw) === true) {
-      item.reason = 'paid';
+      var paidAt = paidAtMs(raw);
+      if (paidAt === undefined) {
+        addCode(missing, 'invalid_commitment');
+        return;
+      }
+      item.paid_at = paidAt;
+      if (linkedToCounted(raw, counted)) {
+        item.reason = 'already_in_ledger';
+        excluded.push(item);
+        return;
+      }
+      if (paidAt != null && snapshotAt != null && paidAt <= snapshotAt) {
+        item.reason = 'paid';
+        excluded.push(item);
+        return;
+      }
+      item.reason = 'unreconciled_paid_commitment';
       excluded.push(item);
+      addCode(missing, 'unreconciled_paid_commitment');
       return;
     }
     if (paydayYmd != null && due.ymd > paydayYmd) {
       item.reason = 'due_after_payday';
-      excluded.push(item);
-      return;
-    }
-    if (paydayYmd != null && due.ymd === paydayYmd) {
-      item.reason = 'due_on_payday';
       excluded.push(item);
       return;
     }
@@ -1810,7 +1841,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     else sums[kind] = next;
   }
 
-  function considerCommitment(raw, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments) {
+  function considerCommitment(raw, currency, paydayYmd, snapshotAt, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments) {
     if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
       addCode(missing, 'invalid_commitment');
       return;
@@ -1857,12 +1888,14 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
           amountEstimated: row.amountEstimated === true || raw.amountEstimated === true || row.estimated === true || raw.estimated === true,
           amountKind: row.amountKind || raw.amountKind,
           linkedPaymentIds: row.linkedPaymentIds || raw.linkedPaymentIds,
-          linked_payment_ids: row.linked_payment_ids || raw.linked_payment_ids
-        }, kind, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
+          linked_payment_ids: row.linked_payment_ids || raw.linked_payment_ids,
+          paidAt: own(row, 'paidAt') ? row.paidAt : raw.paidAt,
+          paid_at: own(row, 'paid_at') ? row.paid_at : raw.paid_at
+        }, kind, currency, paydayYmd, snapshotAt, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
       }
       return;
     }
-    considerOne(raw, kind, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
+    considerOne(raw, kind, currency, paydayYmd, snapshotAt, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
   }
 
   function txnTime(tx) {
@@ -1890,7 +1923,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return false;
   }
 
-  function considerTransaction(tx, currency, snapshotAt, seenIds, missing, excluded, sums) {
+  function considerTransaction(tx, currency, snapshotAt, nowMs, seenIds, missing, excluded, sums) {
     if (tx == null || typeof tx !== 'object' || Array.isArray(tx)) {
       addCode(missing, 'invalid_transaction');
       return;
@@ -1916,6 +1949,18 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     var amount = txnAmount(tx);
     var rowCurrency = normalizeCurrency(tx.currency);
     var review = txnReviewState(tx);
+    if (review === 'confirmed' && nowMs != null && at > nowMs) {
+      addCode(missing, 'future_transaction');
+      excluded.push({
+        reason: 'future_transaction',
+        id: id,
+        amount_minor: isInt(amount) ? amount : null,
+        currency: rowCurrency,
+        direction: tx.direction || null,
+        occurred_at: at
+      });
+      return;
+    }
     if (review !== 'confirmed') {
       if (!isInt(amount) || amount < 0 || !rowCurrency) {
         addCode(missing, 'invalid_transaction');
@@ -2023,11 +2068,11 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
 
     var staleField = pickInt(src, ['staleAfterDays', 'stale_after_days']);
-    var staleDays = STALE_AFTER_DAYS;
+    var staleMs = STALE_AFTER_MS;
     if (own(src, 'staleAfterDays') || own(src, 'stale_after_days')) {
       if (staleField.invalid || staleField.conflict || !staleField.present || staleField.value < 1 || staleField.value > 3660) {
         addCode(missing, 'stale_after_days');
-      } else staleDays = staleField.value;
+      } else staleMs = staleField.value * DAY_MS;
     }
 
     var savings = pickInt(src, ['savingsReservedMinor', 'savings_reserved_minor']);
@@ -2041,8 +2086,9 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
 
     var today = now.present && cairoOffsetMinutes(now.value) != null ? cairoParts(now.value) : null;
     if (today && payday && today.ymd > payday.ymd) addCode(missing, 'payday_passed');
+    if (today && payday && today.ymd === payday.ymd) addCode(missing, 'payday_today');
     if (now.present && reportedAt.present && reportedAt.value > now.value) addCode(missing, 'future_snapshot');
-    if (now.present && reportedAt.present && reportedAt.value <= now.value && now.value - reportedAt.value > staleDays * DAY_MS) {
+    if (now.present && reportedAt.present && reportedAt.value <= now.value && now.value - reportedAt.value > staleMs) {
       addCode(missing, 'stale_snapshot');
     }
 
@@ -2067,10 +2113,10 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     var side = { unconfirmedTransactions: txSums.unconfirmed, unconfirmedCommitments: unconfirmedCommitments };
     var i;
     if (currency && reportedAt.present && txList.present) {
-      for (i = 0; i < txList.value.length; i++) considerTransaction(txList.value[i], currency, reportedAt.value, seenTx, missing, excluded, txSums);
+      for (i = 0; i < txList.value.length; i++) considerTransaction(txList.value[i], currency, reportedAt.value, now.present ? now.value : null, seenTx, missing, excluded, txSums);
     }
     if (currency && commitmentPick.present) {
-      for (i = 0; i < commitmentPick.value.length; i++) considerCommitment(commitmentPick.value[i], currency, paydayYmd, seenObligations, txSums.counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
+      for (i = 0; i < commitmentPick.value.length; i++) considerCommitment(commitmentPick.value[i], currency, paydayYmd, reportedAt.present ? reportedAt.value : null, seenObligations, txSums.counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
     }
     if (txSums.before) excluded.push({ reason: 'before_snapshot', count: txSums.before });
     if (txSums.at) excluded.push({ reason: 'at_snapshot', count: txSums.at });
@@ -2094,8 +2140,12 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     }
 
     var calendarDays = civilIndex(payday) - civilIndex(today);
-    var days = calendarDays === 0 ? 1 : calendarDays;
-    var perDay = truncDiv(safe, days);
+    if (calendarDays <= 0) {
+      addCode(missing, calendarDays === 0 ? 'payday_today' : 'payday_passed');
+      return emptyResult(currency, missing, excluded, paydayInfo, side);
+    }
+    var days = calendarDays;
+    var perDay = floorDiv(safe, days);
     var remainder = safe - perDay * days;
     billsDue.sort(function (a, b) {
       if (a.due < b.due) return -1;
@@ -2121,13 +2171,13 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       breakdown: [
         { id: 'snapshot', label: 'Reported balance', amount_minor: balance.value, included: true },
         { id: 'transactions', label: 'Confirmed transactions after the snapshot', amount_minor: txSums.net, included: true },
-        { id: 'rent', label: 'Rent due before payday', amount_minor: -sums.rent, included: true },
-        { id: 'installment', label: 'Installments due before payday', amount_minor: -sums.installment, included: true },
-        { id: 'gameya', label: "Gam'eya pay-ins due before payday", amount_minor: -sums["gam'eya"], included: true },
-        { id: 'family', label: 'Family support due before payday', amount_minor: -sums.family, included: true },
-        { id: 'utility', label: 'Utilities due before payday', amount_minor: -sums.utility, included: true },
-        { id: 'subscription', label: 'Subscriptions due before payday', amount_minor: -sums.subscription, included: true },
-        { id: 'other', label: 'Other commitments due before payday', amount_minor: -sums.other, included: true },
+        { id: 'rent', label: 'Rent due on or before payday', amount_minor: -sums.rent, included: true },
+        { id: 'installment', label: 'Installments due on or before payday', amount_minor: -sums.installment, included: true },
+        { id: 'gameya', label: "Gam'eya pay-ins due on or before payday", amount_minor: -sums["gam'eya"], included: true },
+        { id: 'family', label: 'Family support due on or before payday', amount_minor: -sums.family, included: true },
+        { id: 'utility', label: 'Utilities due on or before payday', amount_minor: -sums.utility, included: true },
+        { id: 'subscription', label: 'Subscriptions due on or before payday', amount_minor: -sums.subscription, included: true },
+        { id: 'other', label: 'Other commitments due on or before payday', amount_minor: -sums.other, included: true },
         { id: 'savings', label: 'Savings reservation', amount_minor: -savings.value, included: true },
         { id: 'emergency_buffer', label: 'Emergency buffer', amount_minor: -emergency.value, included: true },
         { id: 'planned_payday', label: 'Planned payday income', amount_minor: paydayAmount.value, included: false },
@@ -2136,6 +2186,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
       ],
       bills_due: billsDue,
       unconfirmed_transactions: txSums.unconfirmed,
+      unconfirmed_count: txSums.unconfirmed.length,
       unconfirmed_net_minor: txSums.unconfirmedNet,
       unconfirmed_commitments: unconfirmedCommitments,
       missing: [],
@@ -2145,7 +2196,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
   }
 
   var api = {
-    STALE_AFTER_DAYS: STALE_AFTER_DAYS,
+    STALE_AFTER_MS: STALE_AFTER_MS,
     evaluate: evaluate,
     cairoOffsetMinutes: cairoOffsetMinutes,
     cairoParts: cairoParts
@@ -3243,7 +3294,8 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     if (result.status === 'shortfall') text += ' The runway is short by ' + formatMoney(-result.safe_to_spend_minor, result.currency) + '.';
     text += ' Projected payday income was not added to available now.';
     if (result.unconfirmed_transactions && result.unconfirmed_transactions.length) {
-      text += ' Unconfirmed notification transactions are excluded from that number.';
+      var pendingCount = typeof result.unconfirmed_count === 'number' ? result.unconfirmed_count : result.unconfirmed_transactions.length;
+      text += ' Unconfirmed notification transactions (' + pendingCount + ') are excluded from that number.';
       if (typeof result.unconfirmed_net_minor === 'number') text += ' Shown separately, their net is ' + formatMoney(result.unconfirmed_net_minor, result.currency) + '.';
     }
     if (cost) {
