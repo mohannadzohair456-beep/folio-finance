@@ -53,10 +53,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh workflow run "Folio device upgrade" --ref main -f candidate_tag=v0.3.66
+          gh workflow run "Folio device upgrade" --repo "$GITHUB_REPOSITORY" --ref main -f candidate_tag=v0.3.66
           echo "Dispatched workflow_dispatch on main with candidate_tag=v0.3.66"
           sleep 8
-          gh run list --workflow folio-device-upgrade.yml --event workflow_dispatch --limit 3
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow folio-device-upgrade.yml --event workflow_dispatch --limit 3
 
   script-self-check:
     # head_ref guard: the dispatch-only PR must not start emulators.
