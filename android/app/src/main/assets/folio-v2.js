@@ -21,7 +21,7 @@
   }
   function detectAmount(text){
     let t=String(text).toLowerCase().replace(/[٠-٩۰-۹]/g,c=>String(c.charCodeAt(0)>=1776?c.charCodeAt(0)-1776:c.charCodeAt(0)-1632)).replace(/(?:egp|egyptian pounds?|pounds?|جنيه|جنيهات|sar|riyal|usd|dollars?)/gi,' ');
-    const matches=[...t.matchAll(/(\d[\d,]*(?:\.\d+)?\s*(?:thousand|million|k|m|ألف|الف|آلاف|مليون|ملايين)?)/gi)];
+    const amountRe=/(\d[\d,]*(?:\.\d+)?\s*(?:thousand|million|k|m|ألف|الف|آلاف|مليون|ملايين)?)/gi,matches=[];let amountHit;while((amountHit=amountRe.exec(t)))matches.push(amountHit);
     if(matches.length)return numberValue(matches[0][1]);
     const m=t.match(/(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)(?:[\s-]+(?:and|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million))*/i);
     return m?numberValue(m[0]):null;
@@ -177,7 +177,7 @@
   function captureOnboardFields(){
     if(stage!==1)return true;
     for(const [id,key] of [['onb-balance','reportedBalanceMinor'],['onb-income','monthlyIncomeMinor'],['onb-budget','monthlyBudgetMinor']]){
-      const el=$(id),raw=el?.value.trim()||'';
+      const el=$(id),raw=(el&&el.value.trim())||'';
       if(!raw)continue;
       const amount=Number(raw);if(!Number.isFinite(amount)||amount<0||amount>100000000){if(el)el.focus();return false;}
       state[key]=moneyMinor(amount);
