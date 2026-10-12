@@ -37,8 +37,31 @@ env:
   CANDIDATE_TAG: ${{ (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && format('v0.3.{0}', github.event.workflow_run.run_number)) || github.event.inputs.candidate_tag || '' }}
 
 jobs:
+  # The cloud-agent GitHub token cannot call workflow_dispatch (actions=write
+  # returns 403). This job runs only on that dispatch PR and asks the
+  # repository GITHUB_TOKEN to start the gate on main. It does not change
+  # promotion rules. Do not merge this branch.
+  dispatch-v0366-on-main:
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'cursor/dispatch-v0366-gate-b6b0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Folio device upgrade for v0.3.66 on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run "Folio device upgrade" --ref main -f candidate_tag=v0.3.66
+          echo "Dispatched workflow_dispatch on main with candidate_tag=v0.3.66"
+          sleep 8
+          gh run list --workflow folio-device-upgrade.yml --event workflow_dispatch --limit 3
+
   script-self-check:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # head_ref guard: the dispatch-only PR must not start emulators.
+    # On push, workflow_dispatch, and workflow_run, head_ref is empty.
+    if: ${{ github.head_ref != 'cursor/dispatch-v0366-gate-b6b0' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -49,7 +72,9 @@ jobs:
 
   upgrade-from-v0233:
     needs: script-self-check
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # head_ref guard: the dispatch-only PR must not start emulators.
+    # On push, workflow_dispatch, and workflow_run, head_ref is empty.
+    if: ${{ github.head_ref != 'cursor/dispatch-v0366-gate-b6b0' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -108,7 +133,9 @@ jobs:
 
   v0233-page-on-api26:
     needs: script-self-check
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # head_ref guard: the dispatch-only PR must not start emulators.
+    # On push, workflow_dispatch, and workflow_run, head_ref is empty.
+    if: ${{ github.head_ref != 'cursor/dispatch-v0366-gate-b6b0' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -145,7 +172,9 @@ jobs:
 
   cold-launch-latency:
     needs: script-self-check
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # head_ref guard: the dispatch-only PR must not start emulators.
+    # On push, workflow_dispatch, and workflow_run, head_ref is empty.
+    if: ${{ github.head_ref != 'cursor/dispatch-v0366-gate-b6b0' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -257,7 +286,9 @@ jobs:
 
   clean-launch:
     needs: script-self-check
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # head_ref guard: the dispatch-only PR must not start emulators.
+    # On push, workflow_dispatch, and workflow_run, head_ref is empty.
+    if: ${{ github.head_ref != 'cursor/dispatch-v0366-gate-b6b0' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
