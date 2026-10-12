@@ -271,6 +271,36 @@
     return '';
   }
 
+  // A stored ledger is already this person's workspace. A missing onboarding
+  // flag must not hide it behind setup, where finishing setup would replace it.
+  function storedWorkspaceHasLedger(state) {
+    if (!state || typeof state !== 'object') return false;
+    if (Array.isArray(state.transactions) && state.transactions.length > 0) return true;
+    if (Array.isArray(state.accounts)) {
+      for (let i = 0; i < state.accounts.length; i++) {
+        const account = state.accounts[i];
+        if (account && account.balanceMinor != null && Number.isFinite(Number(account.balanceMinor))) return true;
+      }
+    }
+    if (state.reportedBalanceMinor != null && Number.isFinite(Number(state.reportedBalanceMinor))) return true;
+    if (Number(state.monthlyIncomeMinor) > 0) return true;
+    if (Number(state.monthlyBudgetMinor) > 0) return true;
+    const budgets = state.budgets;
+    if (budgets && typeof budgets === 'object') {
+      const currencies = Object.keys(budgets);
+      for (let i = 0; i < currencies.length; i++) {
+        const rows = budgets[currencies[i]];
+        if (!rows || typeof rows !== 'object') continue;
+        const names = Object.keys(rows);
+        for (let j = 0; j < names.length; j++) {
+          const amount = Number(rows[names[j]]);
+          if (Number.isFinite(amount) && amount !== 0) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function migrate(input, corruptText) {
     if (typeof corruptText === 'string') {
       return {
@@ -380,6 +410,7 @@
     }).filter(Boolean);
     state.legacyQueue = Array.isArray(input.legacyQueue) ? clone(input.legacyQueue) : [];
     assignRunway(state, input);
+    if (state.v2Onboarded !== true && storedWorkspaceHasLedger(state)) state.v2Onboarded = true;
     return { state: state, snapshot: snapshot, migrated: needsMigration };
   }
 
@@ -776,9 +807,10 @@ function initDemo(){
  ]};
 }
 function emptyState(){return FolioData.emptyState();}
-function load(){let rawText=null;try{rawText=localStorage.getItem(STORAGE);}catch(e){rawText=null;}let parsed=null,corrupt=false;if(rawText!=null){try{parsed=JSON.parse(rawText);}catch(e){corrupt=true;}}let result;try{result=FolioData.migrate(corrupt?undefined:parsed,corrupt?rawText:null);}catch(e){result={state:FolioData.emptyState(),snapshot:{folioSnapshot:'premigration',reason:'migrate-error',raw:rawText}};}if(result.snapshot!=null){try{if(localStorage.getItem(FolioData.SNAPSHOT_KEY)==null)localStorage.setItem(FolioData.SNAPSHOT_KEY,JSON.stringify(result.snapshot));}catch(e){}}return result.state;}
+let storageUnreadable=false,skipBootPersist=false,refusedBootWrite=false;
+function load(){let rawText=null;try{rawText=localStorage.getItem(STORAGE);}catch(e){storageUnreadable=true;return emptyState();}let parsed=null,corrupt=false;if(rawText!=null){try{parsed=JSON.parse(rawText);}catch(e){corrupt=true;}}let result;try{result=FolioData.migrate(corrupt?undefined:parsed,corrupt?rawText:null);}catch(e){skipBootPersist=true;result={state:emptyState(),snapshot:{folioSnapshot:'premigration',reason:'migrate-error',raw:rawText}};}if(corrupt)skipBootPersist=true;if(result.snapshot!=null){try{if(localStorage.getItem(FolioData.SNAPSHOT_KEY)==null)localStorage.setItem(FolioData.SNAPSHOT_KEY,JSON.stringify(result.snapshot));}catch(e){}}return result.state;}
 let state=load(), page='overview', filter='all', query='', currentEdit=null, modalType='expense', toastTimer, permissionStatus=false, captureDiagnostics={allowed:0,parsed:0,unrecognized:0,lastAt:0,lastResult:''}, observedSources=[];
-function persist(){try{state.schemaVersion=FolioData.SCHEMA_VERSION;localStorage.setItem(STORAGE,JSON.stringify(state));return true;}catch(e){notify('Could not save. Please check your device storage.');return false;}}
+function persist(){if(storageUnreadable){notify('Saved data could not be read, so it was left unchanged.');return false;}if(skipBootPersist){if(!refusedBootWrite){refusedBootWrite=true;notify('Saved data could not be read, so it was left unchanged.');}return false;}try{state.schemaVersion=FolioData.SCHEMA_VERSION;localStorage.setItem(STORAGE,JSON.stringify(state));return true;}catch(e){notify('Could not save. Please check your device storage.');return false;}}
 function monthTx(offset=0){return monthAll(offset).filter(t=>t.currency===state.currency);}function txWhen(value){const when=FolioData.transactionTime(value);return when==null?new Date(NaN):new Date(when);}function monthAll(offset=0){const date=new Date(),m=date.getMonth()-offset,y=date.getFullYear();return state.transactions.filter(t=>{if(!t||typeof t!=='object')return false;if(FolioData.transactionStatus(t)!=='confirmed')return false;const x=txWhen(t.occurredAt);if(!Number.isFinite(x.getTime()))return false;return x.getMonth()===((m%12)+12)%12&&x.getFullYear()===y+Math.floor(m/12);});}function foreignCurrencyNote(records){const summary=FolioData.summarize(records,state.currency);const bits=[];Object.keys(summary.byCurrency).sort().forEach(cur=>{if(cur===state.currency)return;const s=summary.byCurrency[cur];const label=cur||'Unspecified currency';bits.push(label+' in '+fmt(s.income,cur||state.currency)+', out '+fmt(s.expense,cur||state.currency));});if(!bits.length)return '';return `<p class="tracking-note">Not added into ${h(state.currency)} totals. ${h(bits.join(' · '))}</p>`;}function otherCurrencySection(){const list=state.transactions.filter(t=>t&&t.currency!==state.currency);if(!list.length)return '';return `<section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>Other currencies</h2><p>Kept separate from ${h(state.currency)}. These amounts are not added into the totals above.</p></div></div>${list.map(singleTx).join('')}</section>`;}function otherBudgetNote(){const keys=Object.keys(state.budgets||{}).filter(c=>c!==state.currency&&state.budgets[c]&&Object.keys(state.budgets[c]).length);if(!keys.length)return '';return `<p class="tracking-note">Budgets in ${h(keys.join(', '))} are stored separately and are not added to ${h(state.currency)}. Switch the reporting currency in Settings to see them.</p>`;}
 function txStats(records){return FolioData.summarize(records,state.currency);}
 function currentBudgets(){return state.budgets[state.currency]||(state.budgets[state.currency]={});}
@@ -1473,7 +1505,7 @@ function undoFastEntry(){
   notify('Entry removed.');
 }
 /* </folio-inline:folio-home.js> */
-render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
+render();if(!storageUnreadable&&!skipBootPersist)persist();if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
 </script><script>
 /* <folio-inline:payday-runway.js> */
 /* Payday Money Runway. Experimental, deterministic, no DOM and no network.

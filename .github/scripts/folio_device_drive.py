@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -21,6 +22,42 @@ from pathlib import Path
 
 PKG = "com.folio.finance.app"
 ACTIVITY = PKG + "/com.folio.finance.MainActivity"
+WEBVIEW_LEVELDB = (
+    "/data/data/" + PKG + "/app_webview/Default/Local Storage/leveldb",
+    "/data/data/" + PKG + "/app_webview/Local Storage/leveldb",
+    "/data/user/0/" + PKG + "/app_webview/Default/Local Storage/leveldb",
+    "/data/user/0/" + PKG + "/app_webview/Local Storage/leveldb",
+)
+
+
+def sh_quote(text):
+    return "'" + str(text).replace("'", "'\\''") + "'"
+
+
+def count_storage_marker(blob, text):
+    """Count a localStorage marker in raw LevelDB bytes.
+
+    WebView stores the JSON as UTF-8. Some records are UTF-16LE. Snappy-compressed
+    table blocks are not decoded; a just-flushed write is in the uncompressed log.
+    """
+    if not blob or not text:
+        return 0
+    raw = text.encode("utf-8")
+    wide = text.encode("utf-16-le")
+    return blob.count(raw) + blob.count(wide)
+
+
+def upgrade_settled_home(blob):
+    """The post-upgrade home signal.
+
+    Onboarding's eyebrow is 'YOUR MONEY, SIMPLIFIED', so a case-insensitive
+    search for 'Your money' matches setup and returns before the ledger paints.
+    Home is 'Available estimate' or 'Edit Carrefour', and never 'Meet Folio'.
+    """
+    lowered = (blob or "").lower()
+    if "meet folio" in lowered:
+        return False
+    return "available estimate" in lowered or "edit carrefour" in lowered
 
 
 def normalized_label(text):
@@ -790,6 +827,123 @@ class Driver:
         result = self.shell("logcat -d -t 300", check=False, timeout=30)
         self.save_text("logcat.txt", (result.stdout or "") + (result.stderr or ""))
 
+    def ensure_root(self):
+        """google_apis images allow adb root. The release APK is not debuggable, so run-as cannot read WebView storage."""
+        result = self.adb("root", check=False, timeout=40)
+        self.adb("wait-for-device", check=False, timeout=40)
+        root_log = ((result.stdout or "") + (result.stderr or "")).strip()
+        deadline = time.time() + 15
+        last = ""
+        while time.time() < deadline:
+            ident = self.shell("id", check=False)
+            last = ((ident.stdout or "") + (ident.stderr or "")).strip()
+            if "uid=0" in last:
+                return True, root_log + "\n" + last
+            time.sleep(0.5)
+        return False, root_log + "\n" + last
+
+    def capture_webview_storage(self, label):
+        """Pull WebView LevelDB and record whether the entered merchant is on disk."""
+        rooted, root_log = self.ensure_root()
+        lines = ["label=" + label, "rooted=" + ("1" if rooted else "0"), root_log]
+        dest = self.artifacts / ("webview-leveldb-" + label)
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True)
+        found_dirs = 0
+        for remote in WEBVIEW_LEVELDB:
+            probe = self.shell("ls -la " + sh_quote(remote), check=False, timeout=20)
+            listing = ((probe.stdout or "") + (probe.stderr or "")).strip()
+            lines.append("DIR " + remote)
+            lines.append(listing)
+            if probe.returncode != 0 or "No such file" in listing or "Permission denied" in listing:
+                continue
+            found_dirs += 1
+            local = dest / str(found_dirs)
+            pulled = self.adb("pull", remote, str(local), check=False, timeout=90)
+            lines.append(((pulled.stdout or "") + (pulled.stderr or "")).strip())
+        carrefour = 0
+        flag = 0
+        scanned = 0
+        for path in dest.rglob("*"):
+            if not path.is_file():
+                continue
+            blob = path.read_bytes()
+            scanned += len(blob)
+            carrefour += count_storage_marker(blob, "Carrefour")
+            flag += count_storage_marker(blob, "v2Onboarded")
+        lines.append("bytes_scanned=" + str(scanned))
+        lines.append("carrefour_hits=" + str(carrefour))
+        lines.append("v2onboarded_hits=" + str(flag))
+        lines.append("leveldb_dirs=" + str(found_dirs))
+        self.save_text("storage-" + label + ".txt", "\n".join(lines) + "\n")
+        return {
+            "rooted": rooted,
+            "dirs": found_dirs,
+            "carrefour": carrefour > 0,
+            "v2_onboarded": flag > 0,
+            "carrefour_hits": carrefour,
+            "bytes_scanned": scanned,
+            "readable": rooted and found_dirs > 0,
+        }
+
+    def flush_webview_storage(self):
+        """Background Folio so the WebView pauses and commits localStorage before install -r kills it."""
+        print("send HOME so WebView onPause can flush localStorage", flush=True)
+        self.shell("input keyevent 3", check=False)
+        time.sleep(1.5)
+
+    def require_records_on_disk(self):
+        self.flush_webview_storage()
+        last = {"rooted": False, "dirs": 0, "carrefour": False, "readable": False}
+        for attempt in range(8):
+            last = self.capture_webview_storage("before-upgrade")
+            print(
+                "storage before upgrade",
+                "attempt", attempt,
+                "carrefour", last["carrefour"],
+                "dirs", last["dirs"],
+                "rooted", last["rooted"],
+                "bytes", last["bytes_scanned"],
+                flush=True,
+            )
+            if last["carrefour"]:
+                print("STORAGE_DURABLE_BEFORE", flush=True)
+                return last
+            time.sleep(1)
+        if not last["rooted"]:
+            raise DriveError("adb root did not grant uid 0, so WebView storage could not be read before upgrade")
+        if not last["dirs"]:
+            raise DriveError("WebView LevelDB directory was not found before upgrade")
+        raise DriveError("storage was not durable before upgrade")
+
+    def wait_for_upgrade_home(self, timeout=50):
+        """Wait until the upgraded home is up. Onboarding is not success."""
+        deadline = time.time() + timeout
+        last = ""
+        onboarding_since = None
+        while time.time() < deadline:
+            nodes = self.dump_nodes()
+            last = self.blob(nodes)
+            settled = upgrade_settled_home(last)
+            print("upgrade home probe", "nodes", len(nodes), "settled", settled, flush=True)
+            if settled:
+                return last
+            lowered = last.lower()
+            if "meet folio" in lowered and "carrefour" not in lowered:
+                if onboarding_since is None:
+                    onboarding_since = time.time()
+                elif time.time() - onboarding_since >= 15:
+                    print("onboarding stayed up for 15s", flush=True)
+                    break
+            else:
+                onboarding_since = None
+            if "isn't responding" in last or "not responding" in lowered:
+                self.dismiss_anr(last)
+            time.sleep(1)
+        self.save_text("wait-failed.txt", last)
+        return last
+
     def install(self, apk, replace=False):
         flag = ["-r"] if replace else []
         result = self.adb("install", *flag, apk, check=False, timeout=180)
@@ -1137,6 +1291,17 @@ Complete
         raise DriveError("safe center should be used")
     if "$((i + 1))" not in shell or "__PKG__" in shell or "__ACTIVITY__" in shell or PKG not in shell:
         raise DriveError("webview shell substitution failed: " + shell[:400])
+    if upgrade_settled_home("YOUR MONEY, SIMPLIFIED\nMeet Folio.\nContinue"):
+        raise DriveError("onboarding eyebrow was treated as the upgraded home")
+    if not upgrade_settled_home("Your money, in focus.\nAvailable estimate · EGP 8,420.50\nEdit Carrefour"):
+        raise DriveError("upgraded home was not recognized")
+    if upgrade_settled_home("Available estimate\nMeet Folio."):
+        raise DriveError("onboarding mixed with an estimate was treated as home")
+    marker = b"xxCarrefouryy" + "Carrefour".encode("utf-16-le")
+    if count_storage_marker(marker, "Carrefour") != 2:
+        raise DriveError("storage marker count missed utf-8 or utf-16")
+    if count_storage_marker(b"", "Carrefour") != 0 or count_storage_marker(b"v2Onboarded", "Carrefour") != 0:
+        raise DriveError("storage marker count false positive")
     print("SELF_CHECK_OK", flush=True)
 
 
@@ -1168,7 +1333,7 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     driver.wait_for("Open Folio", timeout=20)
     if not driver.tap_text("Open Folio"):
         raise DriveError("could not open Folio")
-    driver.wait_for("Your money", timeout=25)
+    driver.wait_for("in focus", timeout=25)
 
     driver.scroll_to_top()
     time.sleep(0.4)
@@ -1215,6 +1380,7 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     driver.save_text("before-budget.txt", before_budget)
     assert_entered(driver, before_home, before_budget, "before-upgrade")
     driver.shot("before-upgrade")
+    before_disk = driver.require_records_on_disk()
 
     driver.install(new_apk, replace=True)
     new_code, new_name = driver.version_line()
@@ -1222,9 +1388,19 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     if not new_code.isdigit() or int(new_code) <= int(code):
         raise DriveError("upgrade did not raise versionCode (" + code + " -> " + new_code + ")")
     driver.launch()
-    driver.wait_for("Your money", timeout=50)
+    probe = driver.wait_for_upgrade_home(timeout=50)
     if not driver.running():
         raise DriveError("Folio process exited after the upgrade launch")
+    after_disk = driver.capture_webview_storage("after-upgrade")
+    if not upgrade_settled_home(probe):
+        onboarding = "meet folio" in probe.lower() and "carrefour" not in probe.lower()
+        if onboarding and after_disk["carrefour"]:
+            raise DriveError("data is on disk but the UI returned to onboarding")
+        if onboarding and before_disk["carrefour"] and after_disk["readable"] and not after_disk["carrefour"]:
+            raise DriveError("upgrade storage does not contain the entered records")
+        if onboarding:
+            raise DriveError("upgrade returned to onboarding and the entered records are not on screen")
+        raise DriveError("timed out waiting for the upgraded home")
     after_home = driver.collect(scrolls=3)
     driver.save_text("after-home.txt", after_home)
     if "Meet Folio" in after_home and "Carrefour" not in after_home:
