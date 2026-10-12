@@ -4,7 +4,7 @@ function voiceLocaleNow(){
   if(window.FolioV2&&typeof FolioV2.currentVoiceLocale==='function')return FolioV2.currentVoiceLocale();
   return 'en-US';
 }
-function jsArg(value){return String(value==null?'':value).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+function jsArg(value){return String(value==null?'':value).replace(/\\/g,'\\\\').replace(/'/g,'\\x27').replace(/"/g,'\\x22').replace(/&/g,'\\x26').replace(/</g,'\\x3c').replace(/>/g,'\\x3e').replace(/\r/g,'\\r').replace(/\n/g,'\\n').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');}
 function captureBar(){
   var locale=voiceLocaleNow();
   return `<section class="capture-bar" aria-label="Record money"><div class="capture-actions"><button type="button" class="capture-fast" onclick="openFastEntry()">${icon('plus',16)} Quick add</button><button type="button" class="capture-mic" onclick="FolioV2.requestVoice()" aria-label="Voice entry">${icon('mic',18)} Voice entry</button></div><div class="capture-locales" role="group" aria-label="Voice language"><button type="button" class="capture-locale ${locale==='en-US'?'sel':''}" aria-pressed="${locale==='en-US'?'true':'false'}" onclick="FolioV2.chooseLocale('en-US')">English</button><button type="button" class="capture-locale ${locale==='ar-EG'?'sel':''}" aria-pressed="${locale==='ar-EG'?'true':'false'}" onclick="FolioV2.chooseLocale('ar-EG')">العربية</button></div><p class="capture-hint">Folio asks Android to prefer offline speech. If this phone has no offline pack, Folio says how to install it. The system speech screen's recognizer may use the network. Nothing is saved until you confirm.</p></section>`;

@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 2,
+  "currency": "EGP",
+  "capture": true,
+  "sources": ["com.google.android.apps.messaging"],
+  "v2Onboarded": true,
+  "monthlyBudgetMinor": 900000,
+  "monthlyIncomeMinor": 1850000,
+  "reportedBalanceMinor": 842050,
+  "balanceReportedAt": 1759900000000,
+  "balanceUntracked": false,
+  "budgets": {
+    "EGP": { "Food & drinks": 350000, "Transport": 20000 },
+    "SAR": { "Shopping": 8000 }
+  },
+  "transactions": [
+    {
+      "id": "salary-2026-10",
+      "source": "manual",
+      "currency": "EGP",
+      "direction": "income",
+      "amountMinor": 1850000,
+      "merchant": "راتب",
+      "category": "Salary",
+      "occurredAt": 1759900000000,
+      "status": "confirmed"
+    },
+    {
+      "id": "carrefour-2026-10-11",
+      "source": "notification",
+      "currency": "egp",
+      "direction": "Expense",
+      "amountMinor": 12550,
+      "merchant": "Carrefour",
+      "category": "Food & drinks",
+      "occurredAt": 1760213700000,
+      "status": "confirmed",
+      "sourcePackage": "com.example.bank"
+    },
+    {
+      "id": "jarir-sar",
+      "source": "manual",
+      "currency": "SAR",
+      "direction": "expense",
+      "amountMinor": 8650,
+      "merchant": "Jarir",
+      "category": "Shopping",
+      "occurredAt": 1760000000000,
+      "status": "confirmed"
+    }
+  ],
+  "accounts": [
+    {
+      "id": "cash",
+      "name": "Wallet",
+      "type": "cash",
+      "currency": "EGP",
+      "balanceMinor": 20000,
+      "asOf": 1759900000000,
+      "provenance": "manual",
+      "untracked": false
+    },
+    {
+      "id": "card",
+      "name": "Credit",
+      "type": "credit",
+      "currency": "EGP",
+      "balanceMinor": -15000,
+      "asOf": 1759900000000,
+      "provenance": "manual",
+      "untracked": false
+    }
+  ]
+}

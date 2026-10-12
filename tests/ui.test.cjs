@@ -1,4 +1,5 @@
 const fs=require('node:fs'),assert=require('node:assert/strict'),vm=require('node:vm');
+const acorn=require('./vendor/acorn/acorn.js');
 const h=fs.readFileSync('android/app/src/main/assets/index.html','utf8');
 for(const s of ['Folio — Personal Finance','FolioNative','Overview','Transactions','Analytics','Budgets','Settings'])
   assert.ok(h.includes(s),'Missing '+s);
@@ -69,6 +70,36 @@ assert.ok(rendered.includes('&lt;img'),'notification merchant is escaped');
 assert.equal(rendered.includes('<img'), false);
 assert.equal(rendered.includes('<script'), false);
 assert.equal(rendered.includes("onclick='alert"), false);
+assert.ok(rendered.includes('\\x27'),'a quote in a transaction id is a JS escape, not an HTML entity');
+function handlerSources(html){
+  const out=[];
+  const re=/\son[a-z]+\s*=\s*"([^"]*)"/gi;
+  let match;
+  while((match=re.exec(html))){
+    out.push(match[1].replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&'));
+  }
+  return out;
+}
+function assertSingleHandler(html,label){
+  const sources=handlerSources(html);
+  assert.ok(sources.length>0,label+' has a handler');
+  for(const src of sources){
+    const ast=acorn.parse(src,{ecmaVersion:2020});
+    assert.equal(ast.body.length,1,label+' stays one statement: '+src);
+  }
+}
+assertSingleHandler(rendered,'notification row');
+vm.runInContext('state.budgets={EGP:{}};state.budgets.EGP["Food\');alert(1);//"]=100;nav("budgets")', hostile.sandbox);
+assertSingleHandler(hostile.doc.getElementById('root').innerHTML,'budget category');
+vm.runInContext("state.transactions.push({id:'chip',merchant:'A\\\" onclick=\\\"alert(1)\\\"',amountMinor:100,currency:'EGP',direction:'expense',category:'Other',occurredAt:Date.now(),source:'manual'});nav('overview');openFastEntry()", hostile.sandbox);
+const chipSheet=hostile.doc.getElementById('modal-root').innerHTML;
+assert.ok(chipSheet.includes('\\x22'),'a quote in a merchant chip cannot close the attribute');
+assert.equal(chipSheet.includes('<img'), false);
+assertSingleHandler(chipSheet,'merchant chip');
+vm.runInContext("quickEntryRemember('<img src=x onerror=alert(1)>');nav('overview')", hostile.sandbox);
+const quickHtml=hostile.doc.getElementById('root').innerHTML;
+assert.ok(quickHtml.includes('&lt;img'),'one-line entry text is escaped');
+assert.equal(quickHtml.includes('<img'), false);
 
 const backupState={schemaVersion:1,currency:'EGP',capture:true,sources:['com.stc.pay'],v2Onboarded:true,transactions:[{id:'keep',amountMinor:4500,currency:'SAR',direction:'expense',merchant:'Jarir',category:'Shopping',occurredAt:1700000000000,source:'manual'}],budgets:{SAR:{Shopping:250000}},monthlyIncomeMinor:2000000,reportedBalanceMinor:421000,balanceReportedAt:42,monthlyBudgetMinor:900000};
 const seeded=boot(backupState);
@@ -85,6 +116,31 @@ assert.equal(back.v2Onboarded,true);
 assert.equal(back.capture,true);
 assert.equal(back.transactions.find(t=>t.id==='keep').merchant,'Jarir');
 assert.ok(blank.data.get('folio_finance_pre_restore_snapshot'),'restore keeps a snapshot of the previous device data');
+const beforeBad=blank.data.get('folio_finance_v1');
+const badFiles=[
+  '{',
+  JSON.stringify({folioBackup:1,schemaVersion:3,currency:'EGP',transactions:[],budgets:{}}),
+  JSON.stringify({schemaVersion:2,currency:'EGP',transactions:[{id:'a',amountMinor:12.5,currency:'EGP',direction:'expense'}],budgets:{}}),
+  JSON.stringify({schemaVersion:2,currency:'EGP',transactions:[{id:'a',amountMinor:1,currency:'EGP',direction:'expense'},{id:'a',amountMinor:2,currency:'EGP',direction:'expense'}],budgets:{}}),
+  JSON.stringify({schemaVersion:2,currency:'JPY',transactions:[],budgets:{}}),
+  JSON.stringify({schemaVersion:2,currency:'EGP',transactions:[{id:'n',amountMinor:-5,currency:'EGP',direction:'expense'}],budgets:{}}),
+  JSON.stringify({schemaVersion:2,currency:'EGP',transactions:[{id:'nan',amountMinor:'NaN',currency:'EGP',direction:'expense'}],budgets:{}}),
+  'x'.repeat(2000001)
+];
+for(const file of badFiles){
+  assert.equal(blank.sandbox.window.folioImportJson(file),-1,'a bad backup is rejected');
+  assert.equal(blank.data.get('folio_finance_v1'),beforeBad,'a rejected backup leaves the saved workspace untouched');
+}
+const snapshotBefore=blank.data.get('folio_finance_pre_restore_snapshot');
+const setItem=blank.sandbox.localStorage.setItem;
+blank.sandbox.localStorage.setItem=function(key,value){if(key==='folio_finance_pre_restore_snapshot')throw Error('quota');return setItem.call(this,key,value);};
+assert.equal(blank.sandbox.window.folioImportJson(JSON.stringify(backup)),-1,'restore stops when the previous snapshot cannot be saved');
+assert.equal(blank.data.get('folio_finance_v1'),beforeBad);
+assert.equal(blank.data.get('folio_finance_pre_restore_snapshot'),snapshotBefore);
+blank.sandbox.confirm=()=>false;
+blank.sandbox.localStorage.setItem=setItem;
+assert.equal(blank.sandbox.window.folioImportJson(JSON.stringify(backup)),0,'cancel leaves the workspace in place');
+assert.equal(blank.data.get('folio_finance_v1'),beforeBad);
 
 const gradle=fs.readFileSync('android/app/build.gradle','utf8');
 const manifest=fs.readFileSync('android/app/src/main/AndroidManifest.xml','utf8');

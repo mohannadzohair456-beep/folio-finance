@@ -81,6 +81,19 @@
     return Number.isSafeInteger(minor) ? minor : null;
   }
 
+  function forbiddenKey(key) {
+    return key === '__proto__' || key === 'constructor' || key === 'prototype';
+  }
+
+  function ownData(entry) {
+    const copy = {};
+    Object.keys(entry).forEach(key => {
+      if (forbiddenKey(key)) return;
+      copy[key] = entry[key];
+    });
+    return copy;
+  }
+
   function coerceTransaction(entry, index) {
     if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) {
       return {
@@ -96,7 +109,7 @@
         legacyRaw: entry === undefined ? null : entry
       };
     }
-    const copy = Object.assign({}, entry);
+    const copy = ownData(entry);
     if (copy.id == null || copy.id === '') copy.id = 'legacy-' + index + '-' + (copy.occurredAt || 0);
     if (copy.merchant == null || copy.merchant === '') copy.merchant = 'Transaction';
     if (copy.category == null || copy.category === '') copy.category = 'Other';
@@ -156,6 +169,10 @@
       return out;
     }
     Object.keys(budgets).forEach(currency => {
+      if (forbiddenKey(currency)) {
+        legacy.push({ currency: currency, value: budgets[currency], reason: 'forbidden-field' });
+        return;
+      }
       const cats = budgets[currency];
       const bucket = canonicalCurrency(currency) || currency;
       if (cats == null || typeof cats !== 'object' || Array.isArray(cats)) {
@@ -164,6 +181,10 @@
       }
       if (!out[bucket]) out[bucket] = {};
       Object.keys(cats).forEach(cat => {
+        if (forbiddenKey(cat)) {
+          legacy.push({ currency: currency, category: cat, value: cats[cat], reason: 'forbidden-field' });
+          return;
+        }
         const minor = convert(cats[cat]);
         if (minor == null || minor < 0 || !Number.isSafeInteger(minor)) legacy.push({ currency: currency, category: cat, value: cats[cat] });
         else if (Object.prototype.hasOwnProperty.call(out[bucket], cat)) legacy.push({ currency: currency, category: cat, value: cats[cat], reason: 'duplicate-category' });
@@ -283,6 +304,7 @@
 
     const state = emptyState();
     Object.keys(input).forEach(key => {
+      if (forbiddenKey(key)) return;
       if (Object.prototype.hasOwnProperty.call(emptyState(), key) || ENVELOPE_KEYS[key]) return;
       state[key] = clone(input[key]);
     });
@@ -575,6 +597,105 @@
     return copy;
   }
 
+  function backupSchema(value) {
+    if (value == null || value === '') return 0;
+    if (typeof value === 'number' && (value === 0 || value === 1 || value === 2)) return value;
+    if (typeof value === 'string' && /^(0|1|2)$/.test(value)) return Number(value);
+    throw Error('This backup uses a schema version Folio cannot read. Schema stays at 2, so this file was not applied.');
+  }
+
+  function wholeMinor(value) {
+    if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+    if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+      const n = Number(value.trim());
+      if (Number.isSafeInteger(n)) return n;
+    }
+    return null;
+  }
+
+  function assertMinor(value, label, allowNegative) {
+    const n = wholeMinor(value);
+    if (n == null) throw Error(label + ' must be a whole number of minor units. This file was not applied.');
+    if (!allowNegative && n < 0) throw Error(label + ' cannot be negative. This file was not applied.');
+  }
+
+  function assertCurrency(value, label) {
+    if (!canonicalCurrency(value)) throw Error('Unsupported currency code in backup (' + String(value).trim().slice(0, 16) + '). This file was not applied.');
+  }
+
+  function assertNoForbidden(value) {
+    if (!value || typeof value !== 'object') return;
+    const keys = Object.keys(value);
+    for (let i = 0; i < keys.length; i++) {
+      if (forbiddenKey(keys[i])) throw Error('Backup contains a forbidden field. This file was not applied.');
+    }
+  }
+
+  /* A file that would replace the workspace has to say what it means.
+     Opening data already on the device stays lenient in migrate(). */
+  function assertRestorable(parsed) {
+    assertNoForbidden(parsed);
+    const schema = backupSchema(parsed.schemaVersion);
+    if (!Array.isArray(parsed.transactions)) throw Error('Backup file is missing its transactions list. This file was not applied.');
+    if (parsed.currency != null && String(parsed.currency).trim() !== '') assertCurrency(parsed.currency, 'Reporting currency');
+    if (parsed.reportedBalanceMinor != null && parsed.reportedBalanceMinor !== '') assertMinor(parsed.reportedBalanceMinor, 'Reported balance', true);
+    if (parsed.monthlyBudgetMinor != null && parsed.monthlyBudgetMinor !== '') assertMinor(parsed.monthlyBudgetMinor, 'Monthly budget', false);
+    if (parsed.monthlyIncomeMinor != null && parsed.monthlyIncomeMinor !== '') assertMinor(parsed.monthlyIncomeMinor, 'Expected income', false);
+    if (parsed.budgets != null) {
+      if (typeof parsed.budgets !== 'object' || Array.isArray(parsed.budgets)) throw Error('Backup budgets are not a Folio budget map. This file was not applied.');
+      assertNoForbidden(parsed.budgets);
+      const seen = {};
+      Object.keys(parsed.budgets).forEach(currencyKey => {
+        if (forbiddenKey(currencyKey)) throw Error('Backup contains a forbidden field. This file was not applied.');
+        const cats = parsed.budgets[currencyKey];
+        if (cats == null || typeof cats !== 'object' || Array.isArray(cats)) throw Error('A budget currency in this file is not a category map. This file was not applied.');
+        const bucket = canonicalCurrency(currencyKey);
+        if (!bucket) throw Error('Unsupported currency code in backup (' + String(currencyKey).slice(0, 16) + '). This file was not applied.');
+        Object.keys(cats).forEach(cat => {
+          if (forbiddenKey(cat)) throw Error('Backup contains a forbidden field. This file was not applied.');
+          const slot = bucket + '\n' + cat;
+          if (schema >= BUDGET_MINOR_SCHEMA && seen[slot]) throw Error('Backup repeats a category budget. This file was not applied.');
+          if (schema >= BUDGET_MINOR_SCHEMA) seen[slot] = true;
+          const raw = cats[cat];
+          if (schema < BUDGET_MINOR_SCHEMA) {
+            const minor = majorToMinor(raw);
+            if (minor == null || minor < 0) throw Error('A category budget in this file is not a usable amount. This file was not applied.');
+          } else assertMinor(raw, 'Category budget', false);
+        });
+      });
+    }
+    const ids = {};
+    parsed.transactions.forEach(entry => {
+      if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) return;
+      assertNoForbidden(entry);
+      if (entry.id != null && entry.id !== '') {
+        const id = String(entry.id);
+        if (ids[id]) throw Error('Backup contains a duplicate transaction id. This file was not applied.');
+        ids[id] = true;
+      }
+      if (entry.amountMinor != null && entry.amountMinor !== '') assertMinor(entry.amountMinor, 'Transaction amount', false);
+      if (entry.currency != null && String(entry.currency).trim() !== '') assertCurrency(entry.currency, 'Transaction currency');
+    });
+    if (parsed.accounts != null) {
+      if (!Array.isArray(parsed.accounts)) throw Error('Backup accounts are not a list. This file was not applied.');
+      parsed.accounts.forEach(account => {
+        if (account == null || typeof account !== 'object' || Array.isArray(account)) return;
+        assertNoForbidden(account);
+        if (account.balanceMinor != null && account.balanceMinor !== '') assertMinor(account.balanceMinor, 'Account balance', true);
+        if (account.currency != null && String(account.currency).trim() !== '') assertCurrency(account.currency, 'Account currency');
+      });
+    }
+    if (Array.isArray(parsed.balanceObservations)) {
+      parsed.balanceObservations.forEach(row => {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+        if (row.amountMinor != null && row.amountMinor !== '') assertMinor(row.amountMinor, 'Stated balance', true);
+      });
+    }
+    if (parsed.paydayAmountMinor != null && parsed.paydayAmountMinor !== '') assertMinor(parsed.paydayAmountMinor, 'Payday amount', false);
+    if (parsed.savingsReservedMinor != null && parsed.savingsReservedMinor !== '') assertMinor(parsed.savingsReservedMinor, 'Savings reserved', false);
+    if (parsed.emergencyReserveMinor != null && parsed.emergencyReserveMinor !== '') assertMinor(parsed.emergencyReserveMinor, 'Emergency buffer', false);
+  }
+
   function restoreBackup(text) {
     if (typeof text !== 'string' || text.length > 2000000) throw Error('Backup is too large (2 MB maximum).');
     const trimmed = text.replace(/^\uFEFF/, '').trim();
@@ -588,6 +709,7 @@
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error('Backup file must be a Folio JSON object.');
     const looksLikeFolio = parsed.folioBackup === 1 || Array.isArray(parsed.transactions) || (parsed.budgets && typeof parsed.budgets === 'object');
     if (!looksLikeFolio) throw Error('Backup file is missing Folio data.');
+    assertRestorable(parsed);
     return migrate(parsed, null).state;
   }
 
