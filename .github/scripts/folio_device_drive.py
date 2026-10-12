@@ -6,9 +6,15 @@ accessibility tree, with a screenshot OCR fallback when WebView text is
 missing from that tree.
 """
 import argparse
+import hashlib
+import json
+import os
+import platform
 import re
+import statistics
 import subprocess
 import sys
+import textwrap
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -96,6 +102,41 @@ class Driver:
         if match:
             self.width, self.height = int(match.group(1)), int(match.group(2))
         print("screen", self.width, self.height, flush=True)
+
+    def prop(self, name):
+        result = self.shell("getprop " + name, check=False)
+        return (result.stdout or "").strip()
+
+    def note_sdk(self):
+        sdk = self.prop("ro.build.version.sdk")
+        release = self.prop("ro.build.version.release")
+        self.save_text("device-sdk.txt", "sdk=" + sdk + "\nrelease=" + release + "\n")
+        print("device sdk", sdk, "release", release, flush=True)
+        return sdk, release
+
+    def settle_stopped(self):
+        """Force-stop Folio and wait until its process is gone.
+
+        This is a process-cold start. It does not drop the kernel page cache
+        and it does not stop the WebView provider process.
+        """
+        self.shell("am force-stop " + PKG, check=False)
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            if not self.running():
+                time.sleep(1.0)
+                return
+            time.sleep(0.2)
+        raise DriveError("process still running after force-stop")
+
+    def am_start_w(self):
+        result = self.adb("shell", "am", "start", "-W", "-n", ACTIVITY, check=False, timeout=90)
+        text = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+        if result.returncode != 0:
+            raise DriveError("am start -W failed: " + text[-400:])
+        parsed = parse_am_start(text)
+        parsed["raw"] = text
+        return parsed
 
     def wake(self):
         self.shell("input keyevent KEYCODE_WAKEUP", check=False)
@@ -294,17 +335,35 @@ class Driver:
         self.shell(f"input tap {node['cx']} {node['cy']}")
         time.sleep(0.8)
 
+    def in_tap_zone(self, node):
+        """False when the hit point sits in the system bar or a clipped sliver."""
+        if not self.visible(node):
+            return False
+        return node["cy"] < self.height - 140
+
+    def nudge_up(self):
+        x = self.width // 2
+        self.shell(f"input swipe {x} {int(self.height * 0.70)} {x} {int(self.height * 0.50)} 250")
+        time.sleep(0.5)
+
     def tap_text(self, needle, forbid=(), scrolls=4):
-        for _ in range(scrolls + 1):
+        for i in range(scrolls + 1):
             nodes = self.look(needle, forbid)
-            found = [node for node in self.candidates(nodes, needle, forbid) if self.visible(node)]
+            matches = self.candidates(nodes, needle, forbid)
+            found = [node for node in matches if self.in_tap_zone(node)]
             if found:
                 # Prefer a real control over an OCR hit, then the lowest match
                 # so a footer Continue wins over a heading that merely mentions it.
                 found.sort(key=lambda node: (node["class"].startswith("ocr"), -node["cy"]))
                 self.tap_node(found[0])
                 return True
-            self.swipe_up()
+            clipped = [node for node in matches if self.visible(node)]
+            if clipped and i < scrolls:
+                print("clipped", needle, clipped[0]["cy"], "nudging", flush=True)
+                self.nudge_up()
+                continue
+            if i < scrolls:
+                self.swipe_up()
         return False
 
     def tap_control(self, needle, scrolls=2):
@@ -448,11 +507,298 @@ def assert_apk(path):
         raise DriveError(path + " is not an APK")
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def parse_am_start(text):
+    """Parse `am start -W` output. TotalTime is the device-reported figure."""
+    if "Warning: Activity not started" in text:
+        raise DriveError("activity was already running: " + text[-400:])
+    fields = {}
+    for line in text.replace("\r", "").splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip()
+    status = fields.get("Status", "")
+    if status.lower() != "ok":
+        raise DriveError("am start -W status " + (status or "missing") + ": " + text[-400:])
+    def millis(name, required=True):
+        raw = fields.get(name, "")
+        if not raw.isdigit():
+            if required:
+                raise DriveError("am start -W missing " + name + ": " + text[-500:])
+            return None
+        return int(raw)
+    launch_state = fields.get("LaunchState")
+    # API 34+ omits ThisTime. TotalTime is the figure the baseline uses.
+    return {
+        "status": status,
+        "this_time_ms": millis("ThisTime", required=False),
+        "total_time_ms": millis("TotalTime"),
+        "wait_time_ms": millis("WaitTime"),
+        "launch_state": launch_state,
+        "activity": fields.get("Activity"),
+    }
+
+
+def summarize_ms(values):
+    """Median and spread for a list of millisecond samples, in run order.
+
+    spread is max - min. median matches statistics.median: the middle sample
+    when n is odd, otherwise the mean of the two middle samples.
+    """
+    if not values:
+        raise DriveError("no latency samples")
+    ordered = sorted(values)
+    stdev = statistics.stdev(values) if len(values) > 1 else 0.0
+    return {
+        "n": len(values),
+        "min": ordered[0],
+        "max": ordered[-1],
+        "median": statistics.median(values),
+        "spread_max_minus_min": ordered[-1] - ordered[0],
+        "stdev": round(stdev, 2),
+        "values": list(values),
+    }
+
+
+def uptime_delta_ms(start, end):
+    return int(round((float(end) - float(start)) * 1000))
+
+
+def parse_content_output(text):
+    mode = "head"
+    buckets = {"head": [], "startw": [], "poll": [], "log": []}
+    markers = {
+        "---STARTW---": "startw",
+        "---POLL---": "poll",
+        "---LOGCAT---": "log",
+    }
+    for line in text.replace("\r", "").splitlines():
+        stripped = line.strip()
+        if stripped in markers:
+            mode = markers[stripped]
+            continue
+        buckets[mode].append(line)
+
+    def kvs(lines):
+        data = {}
+        misses = []
+        for line in lines:
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key, value = key.strip(), value.strip()
+            if key == "UP_MISS":
+                misses.append(value)
+            else:
+                data[key] = value
+        data["UP_MISS"] = misses
+        return data
+
+    return kvs(buckets["head"]), "\n".join(buckets["startw"]), kvs(buckets["poll"]), "\n".join(buckets["log"])
+
+
+def logcat_deltas_ms(log_text):
+    """Device log timestamps relative to the FolioBench START line, if present."""
+    bench = None
+    displayed = None
+    page_finished = None
+    for line in log_text.splitlines():
+        match = re.match(r"\s*(\d+\.\d+)\b", line)
+        if not match:
+            continue
+        stamp = float(match.group(1))
+        if bench is None and "FolioBench" in line and "START" in line:
+            bench = stamp
+            continue
+        if bench is None:
+            continue
+        if displayed is None and "Displayed com.folio.finance.app" in line:
+            displayed = stamp
+        if page_finished is None and "onPageFinished" in line:
+            page_finished = stamp
+    if bench is None:
+        return {"displayed_ms": None, "on_page_finished_ms": None}
+    def delta(stamp):
+        if stamp is None:
+            return None
+        return int(round((stamp - bench) * 1000))
+    return {
+        "displayed_ms": delta(displayed),
+        "on_page_finished_ms": delta(page_finished),
+    }
+
+
+def webview_shell():
+    script = textwrap.dedent("""\
+        ACT=__ACTIVITY__
+        read_up() {
+          read up _ < /proc/uptime
+          printf '%s\\n' "$up"
+        }
+        logcat -c >/dev/null 2>&1 || true
+        am force-stop __PKG__ || true
+        i=0
+        while pidof __PKG__ >/dev/null 2>&1; do
+          i=$((i + 1))
+          if [ "$i" -gt 8 ]; then
+            echo WARN=process-still-running
+            break
+          fi
+          sleep 1
+        done
+        sleep 1
+        rm -f /data/local/tmp/folio-ui.xml /data/local/tmp/folio-startw.txt
+        log -t FolioBench START || true
+        UP_START=$(read_up)
+        echo "UP_START=$UP_START"
+        am start -W -n "$ACT" > /data/local/tmp/folio-startw.txt 2>&1
+        echo "STARTW_RC=$?"
+        echo "---STARTW---"
+        cat /data/local/tmp/folio-startw.txt
+        echo "---POLL---"
+        prev=""
+        found=0
+        n=0
+        while [ "$n" -lt 15 ]; do
+          n=$((n + 1))
+          if uiautomator dump /data/local/tmp/folio-ui.xml >/dev/null 2>&1; then
+            up_after=$(read_up)
+            if grep -q "Meet Folio" /data/local/tmp/folio-ui.xml; then
+              echo "CONTENT_FOUND=1"
+              echo "UP_SEEN=$up_after"
+              echo "UP_PREV=$prev"
+              echo "DUMPS=$n"
+              found=1
+              break
+            fi
+            prev=$up_after
+            echo "UP_MISS=$up_after"
+          else
+            echo "DUMP_FAIL=$n"
+            sleep 1
+          fi
+        done
+        if [ "$found" -ne 1 ]; then
+          echo "CONTENT_FOUND=0"
+          echo "DUMPS=$n"
+          echo "UP_PREV=$prev"
+        fi
+        echo "---LOGCAT---"
+        logcat -d -v epoch -t 500 2>/dev/null | grep -E 'FolioBench|Displayed com.folio.finance.app|onPageFinished|WebViewFactory|cr_AwContents|cr_WebViewCallback|cr_WebViewChromium' || true
+        """)
+    return script.replace("__ACTIVITY__", ACTIVITY).replace("__PKG__", PKG)
+
+
+def host_facts():
+    cpu = ""
+    mem = ""
+    try:
+        for line in Path("/proc/cpuinfo").read_text(errors="replace").splitlines():
+            if line.startswith("model name"):
+                cpu = line.split(":", 1)[1].strip()
+                break
+    except OSError:
+        pass
+    try:
+        for line in Path("/proc/meminfo").read_text(errors="replace").splitlines():
+            if line.startswith("MemTotal:"):
+                mem = line.split(":", 1)[1].strip()
+                break
+    except OSError:
+        pass
+    return {
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "cpu_model": cpu,
+        "cpu_count": os.cpu_count(),
+        "mem_total": mem,
+        "github_sha": os.environ.get("GITHUB_SHA"),
+        "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+        "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+        "runner_os": os.environ.get("RUNNER_OS"),
+        "runner_arch": os.environ.get("RUNNER_ARCH"),
+        "runner_name": os.environ.get("RUNNER_NAME"),
+        "image_os": os.environ.get("ImageOS"),
+        "image_version": os.environ.get("ImageVersion"),
+    }
+
+
+def self_check():
+    sample = """Starting: Intent { cmp=com.folio.finance.app/.MainActivity }
+Status: ok
+LaunchState: COLD
+Activity: com.folio.finance.app/.MainActivity
+ThisTime: 410
+TotalTime: 512
+WaitTime: 520
+Complete
+"""
+    parsed = parse_am_start(sample.replace("\n", "\r\n"))
+    if parsed["total_time_ms"] != 512 or parsed["launch_state"] != "COLD":
+        raise DriveError("parse_am_start missed TotalTime")
+    modern = "Status: ok\nLaunchState: COLD\nActivity: x\nTotalTime: 2832\nWaitTime: 2931\nComplete\n"
+    modern_parsed = parse_am_start(modern)
+    if modern_parsed["total_time_ms"] != 2832 or modern_parsed["this_time_ms"] is not None:
+        raise DriveError("API 34 output without ThisTime was rejected")
+    legacy = "Status: ok\nThisTime: 10\nTotalTime: 11\nWaitTime: 12\nComplete\n"
+    if parse_am_start(legacy)["launch_state"] is not None:
+        raise DriveError("missing LaunchState should be empty")
+    try:
+        parse_am_start("Status: error\nError: failed\n")
+    except DriveError:
+        pass
+    else:
+        raise DriveError("error status was accepted")
+    try:
+        parse_am_start("Warning: Activity not started, its current task has been brought to the front")
+    except DriveError:
+        pass
+    else:
+        raise DriveError("warm warning was accepted")
+    stats = summarize_ms([30, 10, 20, 40])
+    if stats["median"] != 25 or stats["spread_max_minus_min"] != 30 or stats["min"] != 10:
+        raise DriveError("summarize_ms mismatch " + str(stats))
+    odd = summarize_ms([30, 10, 20])
+    if odd["median"] != 20 or odd["values"] != [30, 10, 20]:
+        raise DriveError("odd median should keep run order")
+    if uptime_delta_ms("10.000", "10.512") != 512:
+        raise DriveError("uptime delta")
+    head, startw, poll, logs = parse_content_output(
+        "UP_START=10.0\nSTARTW_RC=0\n---STARTW---\nStatus: ok\nTotalTime: 400\n"
+        "---POLL---\nUP_MISS=10.5\nCONTENT_FOUND=1\nUP_SEEN=11.2\nUP_PREV=10.5\nDUMPS=2\n"
+        "---LOGCAT---\n1710000000.100  1  1 I FolioBench: START\n"
+        "1710000000.900  1  1 I ActivityTaskManager: Displayed com.folio.finance.app/.MainActivity: +800ms\n"
+        "1710000001.250  1  1 I chromium: onPageFinished file:///android_asset/index.html\n"
+    )
+    if head["UP_START"] != "10.0" or "TotalTime: 400" not in startw or poll["CONTENT_FOUND"] != "1":
+        raise DriveError("content output parse failed")
+    if poll["UP_MISS"] != ["10.5"]:
+        raise DriveError("miss list parse failed")
+    deltas = logcat_deltas_ms(logs)
+    if deltas["displayed_ms"] != 800 or deltas["on_page_finished_ms"] != 1150:
+        raise DriveError("logcat delta parse failed " + str(deltas))
+    shell = webview_shell()
+    if "am start -W -n" not in shell or "Meet Folio" not in shell:
+        raise DriveError("webview shell incomplete")
+    if "$((i + 1))" not in shell or "__PKG__" in shell or "__ACTIVITY__" in shell or PKG not in shell:
+        raise DriveError("webview shell substitution failed: " + shell[:400])
+    print("SELF_CHECK_OK", flush=True)
+
+
 def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     assert_apk(old_apk)
     assert_apk(new_apk)
     driver.wake()
     driver.read_size()
+    driver.note_sdk()
     driver.install(old_apk, replace=False)
     code, name = driver.version_line()
     print("installed old", name, code, flush=True)
@@ -468,6 +814,7 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     driver.fill_labeled("monthly income", "15000", numeric=True)
     driver.fill_labeled("spending target", "9000", numeric=True)
     driver.shot("onboarding-filled")
+    driver.hide_keyboard()
     if not driver.tap_text("Continue", forbid=("Android",)):
         raise DriveError("could not leave the balance step")
     driver.wait_for("Capture only", timeout=20)
@@ -551,6 +898,7 @@ def launch(driver, apk):
     assert_apk(apk)
     driver.wake()
     driver.read_size()
+    driver.note_sdk()
     driver.install(apk, replace=False)
     code, name = driver.version_line()
     print("installed", name, code, flush=True)
@@ -565,21 +913,340 @@ def launch(driver, apk):
     print("LAUNCH_OK", name, code, flush=True)
 
 
+def latency_summary(results):
+    lines = []
+    total = results.get("total_time_ms")
+    if total:
+        lines.append(
+            "LATENCY_TOTALTIME_MS"
+            + " api=" + str(results.get("device", {}).get("sdk", "?"))
+            + " version=" + str(results.get("version_name"))
+            + " n=" + str(total["n"])
+            + " median=" + str(total["median"])
+            + " min=" + str(total["min"])
+            + " max=" + str(total["max"])
+            + " spread=" + str(total["spread_max_minus_min"])
+            + " values=" + ",".join(str(value) for value in total["values"])
+        )
+    content = results.get("webview_content_upper_ms")
+    if content:
+        lines.append(
+            "LATENCY_WEBVIEW_CONTENT_UPPER_MS"
+            + " n=" + str(content["n"])
+            + " median=" + str(content["median"])
+            + " min=" + str(content["min"])
+            + " max=" + str(content["max"])
+            + " spread=" + str(content["spread_max_minus_min"])
+            + " values=" + ",".join(str(value) for value in content["values"])
+        )
+    page = results.get("on_page_finished_ms")
+    if page:
+        lines.append(
+            "LATENCY_ON_PAGE_FINISHED_MS"
+            + " n=" + str(page["n"])
+            + " median=" + str(page["median"])
+            + " values=" + ",".join(str(value) for value in page["values"])
+        )
+    elif results.get("content_runs"):
+        lines.append("LATENCY_ON_PAGE_FINISHED_MS absent")
+    if results.get("webview_content_error"):
+        lines.append("LATENCY_WEBVIEW_CONTENT_FAILED " + str(results["webview_content_error"]))
+    if results.get("error"):
+        lines.append("LATENCY_ERROR " + str(results["error"]))
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def write_latency(driver, results):
+    driver.save_text("latency.json", json.dumps(results, indent=2, sort_keys=True) + "\n")
+    text = latency_summary(results)
+    driver.save_text("latency.txt", text)
+    print(text, flush=True)
+
+
+def latency(driver, apk, runs, content_runs):
+    if runs < 3 or runs > 15:
+        raise DriveError("--runs must be from 3 to 15")
+    if content_runs < 1 or content_runs > 8:
+        raise DriveError("--content-runs must be from 1 to 8")
+    assert_apk(apk)
+    results = {
+        "ok": False,
+        "package": PKG,
+        "activity": ACTIVITY,
+        "apk_sha256": sha256_file(apk),
+        "command": "am start -W -n " + ACTIVITY,
+        "cold_definition": (
+            "am force-stop " + PKG + ", wait until pidof is empty, then sleep 1s. "
+            "No drop_caches. The WebView provider process is left running. "
+            "One warmup start is recorded and excluded from the median."
+        ),
+        "animations": "window, transition, and animator scales set to 0",
+        "measured_runs": runs,
+        "content_runs_requested": content_runs,
+        "host": host_facts(),
+        "emulator": {
+            "api_requested": os.environ.get("FOLIO_EMULATOR_API"),
+            "target": os.environ.get("FOLIO_EMULATOR_TARGET"),
+            "arch": os.environ.get("FOLIO_EMULATOR_ARCH"),
+            "profile": os.environ.get("FOLIO_EMULATOR_PROFILE"),
+            "ram_size": os.environ.get("FOLIO_EMULATOR_RAM"),
+            "options": os.environ.get("FOLIO_EMULATOR_OPTIONS"),
+            "action": os.environ.get("FOLIO_EMULATOR_ACTION"),
+            "disable_animations": os.environ.get("FOLIO_DISABLE_ANIMATIONS"),
+        },
+        "limits": (
+            "Numbers are from a GitHub-hosted emulator with animations disabled "
+            "and GPU swiftshader, not from a physical phone. TotalTime ends at the "
+            "first drawn frame, which is the native loading overlay, not the HTML. "
+            "WebView content time is an upper bound from uiautomator dumps taken "
+            "after am start -W returns, so the dumps can delay rendering."
+        ),
+    }
+    try:
+        driver.wake()
+        driver.read_size()
+        sdk, release = driver.note_sdk()
+        requested = os.environ.get("FOLIO_EMULATOR_API")
+        if requested and sdk != requested:
+            raise DriveError("emulator sdk " + sdk + " != requested " + requested)
+        driver.install(apk, replace=False)
+        code, name = driver.version_line()
+        print("installed", name, code, flush=True)
+        webview = driver.shell("dumpsys webviewupdate", check=False, timeout=40)
+        webview_text = webview.stdout or ""
+        driver.save_text("webviewupdate.txt", webview_text)
+        results.update({
+            "version_name": name,
+            "version_code": code,
+            "device": {
+                "sdk": sdk,
+                "release": release,
+                "abi": driver.prop("ro.product.cpu.abi"),
+                "model": driver.prop("ro.product.model"),
+                "hardware": driver.prop("ro.hardware"),
+                "fingerprint": driver.prop("ro.build.fingerprint"),
+                "screen": str(driver.width) + "x" + str(driver.height),
+                "window_animation_scale": (
+                    driver.shell("settings get global window_animation_scale", check=False).stdout or ""
+                ).strip(),
+                "transition_animation_scale": (
+                    driver.shell("settings get global transition_animation_scale", check=False).stdout or ""
+                ).strip(),
+                "animator_duration_scale": (
+                    driver.shell("settings get global animator_duration_scale", check=False).stdout or ""
+                ).strip(),
+            },
+            "webviewupdate_excerpt": webview_text[:1500],
+        })
+        if not code.isdigit() or int(code) < 140:
+            raise DriveError("expected versionCode >= 140, got " + code)
+
+        driver.settle_stopped()
+        warmup = driver.am_start_w()
+        results["warmup_excluded"] = {
+            "total_time_ms": warmup["total_time_ms"],
+            "wait_time_ms": warmup["wait_time_ms"],
+            "this_time_ms": warmup["this_time_ms"],
+            "launch_state": warmup["launch_state"],
+        }
+        print("warmup TotalTime", warmup["total_time_ms"], warmup["launch_state"], flush=True)
+
+        samples = []
+        attempts = 0
+        while len(samples) < runs and attempts < runs + 6:
+            attempts += 1
+            driver.settle_stopped()
+            sample = driver.am_start_w()
+            state = (sample["launch_state"] or "").upper()
+            if state in {"WARM", "HOT"}:
+                print("discard", state, "TotalTime", sample["total_time_ms"], flush=True)
+                results.setdefault("discarded_not_cold", []).append({
+                    "total_time_ms": sample["total_time_ms"],
+                    "launch_state": sample["launch_state"],
+                })
+                continue
+            samples.append({
+                "total_time_ms": sample["total_time_ms"],
+                "wait_time_ms": sample["wait_time_ms"],
+                "this_time_ms": sample["this_time_ms"],
+                "launch_state": sample["launch_state"],
+            })
+            print("cold", len(samples), sample["total_time_ms"], sample["launch_state"], flush=True)
+        if len(samples) < runs:
+            raise DriveError("only " + str(len(samples)) + " cold starts out of " + str(runs))
+        results["cold_runs"] = samples
+        results["total_time_ms"] = summarize_ms([sample["total_time_ms"] for sample in samples])
+        results["wait_time_ms"] = summarize_ms([sample["wait_time_ms"] for sample in samples])
+        this_times = [sample["this_time_ms"] for sample in samples if isinstance(sample["this_time_ms"], int)]
+        if len(this_times) == len(samples):
+            results["this_time_ms"] = summarize_ms(this_times)
+        else:
+            results["this_time_note"] = (
+                "am start -W did not print ThisTime. TotalTime is the measured value."
+            )
+
+        # Content timing is best-effort. A miss must not discard the TotalTime
+        # series: the release APK has no render hook, and uiautomator can fail
+        # to go idle. The failure is stored beside the cold-start numbers.
+        try:
+            script_path = driver.artifacts / "webview_time.sh"
+            script_path.write_text(webview_shell())
+            driver.adb("push", str(script_path), "/data/local/tmp/folio_webview_time.sh")
+            content = []
+            attempts = 0
+            while len(content) < content_runs and attempts < content_runs + 4:
+                attempts += 1
+                result = driver.adb(
+                    "shell", "sh", "/data/local/tmp/folio_webview_time.sh",
+                    check=False, timeout=180)
+                output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+                driver.save_text("content-%02d.txt" % attempts, output + "\n")
+                head, startw, poll, logs = parse_content_output(output)
+                if result.returncode != 0 or head.get("STARTW_RC") not in (None, "0"):
+                    raise DriveError("webview timing shell failed: " + output[-400:])
+                started = parse_am_start(startw)
+                state = (started["launch_state"] or "").upper()
+                if state in {"WARM", "HOT"}:
+                    print("content discard", state, flush=True)
+                    continue
+                found = poll.get("CONTENT_FOUND") == "1"
+                upper = None
+                lower = None
+                if found and head.get("UP_START") and poll.get("UP_SEEN"):
+                    upper = uptime_delta_ms(head["UP_START"], poll["UP_SEEN"])
+                    if poll.get("UP_PREV"):
+                        lower = uptime_delta_ms(head["UP_START"], poll["UP_PREV"])
+                deltas = logcat_deltas_ms(logs)
+                row = {
+                    "total_time_ms": started["total_time_ms"],
+                    "launch_state": started["launch_state"],
+                    "content_found": found,
+                    "content_upper_ms": upper,
+                    "content_lower_ms": lower,
+                    "dumps": poll.get("DUMPS"),
+                    "displayed_ms": deltas["displayed_ms"],
+                    "on_page_finished_ms": deltas["on_page_finished_ms"],
+                }
+                print("content", attempts, row, flush=True)
+                if not found:
+                    driver.adb(
+                        "pull", "/data/local/tmp/folio-ui.xml",
+                        str(driver.artifacts / ("content-%02d-ui.xml" % attempts)),
+                        check=False)
+                    raise DriveError("WebView text Meet Folio was not in the accessibility tree")
+                content.append(row)
+            if len(content) < content_runs:
+                raise DriveError("only " + str(len(content)) + " content samples")
+            driver.adb(
+                "pull", "/data/local/tmp/folio-ui.xml",
+                str(driver.artifacts / "webview-ui.xml"),
+                check=False)
+            results["content_runs"] = content
+            uppers = [row["content_upper_ms"] for row in content if row["content_upper_ms"] is not None]
+            if len(uppers) != len(content):
+                raise DriveError("content upper bound missing")
+            results["webview_content_upper_ms"] = summarize_ms(uppers)
+            lowers = [row["content_lower_ms"] for row in content if row["content_lower_ms"] is not None]
+            if lowers:
+                results["webview_content_lower_ms"] = summarize_ms(lowers)
+            finished = [row["on_page_finished_ms"] for row in content if row["on_page_finished_ms"] is not None]
+            if finished:
+                results["on_page_finished_ms"] = summarize_ms(finished)
+            else:
+                results["on_page_finished_note"] = (
+                    "The release APK does not log onPageFinished. No log line contained "
+                    "that marker, so there is no separate WebView callback timestamp."
+                )
+        except Exception as exc:
+            results["webview_content_error"] = str(exc)
+            print("WEBVIEW_CONTENT_FAILED", exc, flush=True)
+        driver.shot("latency-screen")
+        results["ok"] = True
+        print("LATENCY_OK", name, code, flush=True)
+    except Exception as exc:
+        results["error"] = str(exc)
+        raise
+    finally:
+        write_latency(driver, results)
+
+
+def blank_check(driver, apk):
+    """Confirm v0.2.33's page did not render, and do not call that a data pass.
+
+    Android 8's system WebView on the google_apis image is Chrome 69. The
+    v0.2.33 inline script uses `??` and `?.`, which that WebView rejects, so
+    #root stays empty and the upgrade UI cannot be driven. If the page does
+    render, this check fails so the real upgrade test can be put back.
+    """
+    assert_apk(apk)
+    driver.wake()
+    driver.read_size()
+    sdk, release = driver.note_sdk()
+    driver.install(apk, replace=False)
+    code, name = driver.version_line()
+    print("installed", name, code, "sdk", sdk, release, flush=True)
+    if name != "0.2.33":
+        raise DriveError("expected v0.2.33, installed " + name)
+    webview = driver.shell("dumpsys webviewupdate", check=False, timeout=40)
+    driver.save_text("webviewupdate.txt", webview.stdout or "")
+    driver.launch()
+    deadline = time.time() + 25
+    blob = ""
+    while time.time() < deadline:
+        nodes = driver.dump_nodes()
+        blob = driver.blob(nodes)
+        if "Meet Folio" in blob:
+            driver.save_text("unexpected-render.txt", blob)
+            driver.shot("rendered")
+            raise DriveError("v0.2.33 rendered Meet Folio; run the upgrade test on this image")
+        if "has stopped" in blob or "isn't responding" in blob:
+            driver.save_text("crash.txt", blob)
+            raise DriveError("v0.2.33 crashed instead of showing a blank page")
+        time.sleep(2)
+    if not driver.running():
+        raise DriveError("v0.2.33 process exited before the page could be checked")
+    driver.save_text("observed.txt", blob)
+    driver.shot("blank-page")
+    if "Folio" not in blob:
+        raise DriveError("v0.2.33 did not show its window: " + blob[-300:])
+    print("V0233_UI_BLANK", name, code, "sdk", sdk, flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("upgrade", "launch"))
+    parser.add_argument("mode", choices=("upgrade", "launch", "latency", "blank-check", "self-check"))
     parser.add_argument("--apk")
     parser.add_argument("--old")
     parser.add_argument("--new")
     parser.add_argument("--expect-old", default="0.2.33")
-    parser.add_argument("--artifacts", required=True)
+    parser.add_argument("--artifacts")
+    parser.add_argument("--runs", type=int, default=7)
+    parser.add_argument("--content-runs", type=int, default=5)
     args = parser.parse_args()
+    if args.mode == "self-check":
+        try:
+            self_check()
+        except Exception as exc:
+            print("FAILED", exc, flush=True)
+            return 1
+        return 0
+    if not args.artifacts:
+        print("FAILED --artifacts is required", flush=True)
+        return 1
     driver = Driver(Path(args.artifacts))
     try:
         if args.mode == "upgrade":
             if not args.old or not args.new:
                 raise DriveError("upgrade needs --old and --new")
             upgrade(driver, args.old, args.new, args.expect_old)
+        elif args.mode == "latency":
+            if not args.apk:
+                raise DriveError("latency needs --apk")
+            latency(driver, args.apk, args.runs, args.content_runs)
+        elif args.mode == "blank-check":
+            if not args.apk:
+                raise DriveError("blank-check needs --apk")
+            blank_check(driver, args.apk)
         else:
             if not args.apk:
                 raise DriveError("launch needs --apk")

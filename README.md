@@ -48,7 +48,7 @@ Never commit the keystore or the password. The repository is public.
 
 Device checks that do not publish a release:
 
-- [Folio device upgrade](.github/workflows/folio-device-upgrade.yml) installs the v0.2.33 release, enters a balance, a budget, and a transaction through the UI, upgrades with `adb install -r`, and checks the screens. It also clean-installs the current release on API 26 and API 35.
+- [Folio device upgrade](.github/workflows/folio-device-upgrade.yml) installs the v0.2.33 release, enters a balance, a budget, and a transaction through the UI, upgrades with `adb install -r`, and checks the screens on API 34 and API 35. On API 26 that old page does not render (Chrome 69 rejects its script), so the workflow records the blank window instead of claiming the books survived. A main build's prerelease tag is also upgraded from schema-1 v0.3.46, and that tag becomes latest only when both upgrade paths pass. The workflow clean-installs the candidate release on API 26 and API 35, and measures cold-start TotalTime for the signed v0.3.43 APK on API 26, 34, and 35. The baseline write-up is [performance-baseline.md](docs/operations/performance-baseline.md). It does not sign an APK.
 - The side-by-side workflow installs the old debug package and the permanent package together. That is not an in-place upgrade.
 
 ## Layout
