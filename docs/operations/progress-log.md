@@ -32,7 +32,7 @@ Research file `docs/research/hypothesis-validation-2026-10-12.md` is on main at 
 
 The experimental Payday Money Runway is local and off until Settings turns it on. It reads commitments with kind rent, installment, gam'eya, family, utility, subscription, or other, and an explicit paid or unpaid flag. A gam'eya payout, including the whole pot, is not added to available now before receipt, and it is not added after receipt either: received cash has to be a confirmed ledger transaction. Projected payday income stays out of available now. Notification rows still waiting for review, and rows marked suggested, rejected, or duplicate-candidate, stay out of the authoritative total and are listed separately. Incomplete or stale inputs return the status `insufficient data` and no amount. Schema version stays 1. Transaction status migration (P0.1) and per-account balance freshness (P0.3) are not in this change.
 
-Local commands that passed on this branch before the pull request: `node tests/payday-runway.test.cjs` (71 checks), `node tests/money.test.cjs`, `node tests/assistant.test.cjs`, `node tests/ui.test.cjs`, and `node tests/v2.test.cjs`.
+Local commands that passed on this branch before the pull request: `node tests/payday-runway.test.cjs` (71 checks), `node tests/money.test.cjs`, `node tests/assistant.test.cjs`, `node tests/ui.test.cjs`, and `node tests/v2.test.cjs`. Pull request: https://github.com/mohannadzohair456-beep/folio-finance/pull/10 (commit `7a93591`). It is not merged. CI and the device upgrade job had not been recorded yet when this note was written.
 
 ## Not done
 
