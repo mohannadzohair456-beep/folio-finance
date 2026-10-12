@@ -22,6 +22,8 @@ assert.ok(doc.getElementById('root').innerHTML.includes('Ask Folio'),'Assistant 
 assert.equal(JSON.parse(storage.get('folio_finance_v1')).monthlyBudgetMinor,500000,'Onboarding monthly budget saved');
 vm.runInContext('nav("overview")',context);
 assert.ok(doc.getElementById('root').innerHTML.includes('Monthly spending target'),'Overall budget reflected on home');
+assert.ok(doc.getElementById('root').innerHTML.includes('Where your money goes'),'Home shows the money flow after onboarding');
+assert.ok(doc.getElementById('root').innerHTML.includes('No EGP movement this month'),'An empty month explains that the flow has nothing to draw');
 vm.runInContext('nav("budgets")',context);
 assert.ok(doc.getElementById('root').innerHTML.includes('Overall spending target'),'Overall budget reflected on Budgets');
 vm.runInContext('nav("assistant")',context);
@@ -52,6 +54,17 @@ assert.ok(doc.getElementById('root').innerHTML.includes('Savings goal'),'the ass
 doc.getElementById('folio-assistant-input').value='budget for food is 250';
 vm.runInContext('FolioV2.submitText();FolioV2.applyDraft()',context);
 assert.equal(JSON.parse(storage.get('folio_finance_v1')).budgets.EGP['Food & drinks'],25000,'engine category budgets stay minor units');
+const beforeVoice=JSON.parse(storage.get('folio_finance_v1')).transactions.length;
+vm.runInContext("FolioV2.onVoiceResult('','Speech was not recognized. Please type your request. Nothing was saved.')",context);
+assert.equal(JSON.parse(storage.get('folio_finance_v1')).transactions.length,beforeVoice,'a recognition error saves nothing');
+vm.runInContext("FolioV2.onVoiceResult('','')",context);
+assert.equal(JSON.parse(storage.get('folio_finance_v1')).transactions.length,beforeVoice,'cancelling voice saves nothing');
+vm.runInContext("FolioV2.onVoiceResult('I spent 50 on coffee','')",context);
+const voiceHtml=doc.getElementById('root').innerHTML;
+assert.ok(voiceHtml.includes('REVIEW BEFORE SAVING'),'a spoken expense is shown for confirmation');
+assert.ok(voiceHtml.includes('Record expense'),'the spoken draft uses the existing assistant action');
+assert.equal(JSON.parse(storage.get('folio_finance_v1')).transactions.length,beforeVoice,'the spoken draft is not saved until confirmed');
+assert.ok(context.window.FolioV2.voiceNetworkNotice().includes('may still send audio to its provider over the network'),'the voice notice names the network risk');
 assert.ok(!html.includes('demoNotice()}'+ '$'+'{trackingPanel()}<div class="metrics">'),'Tracking diagnostics removed from home');
 const gradle=fs.readFileSync('android/app/build.gradle','utf8');
 const manifest=fs.readFileSync('android/app/src/main/AndroidManifest.xml','utf8');

@@ -100,7 +100,7 @@ function inlined(name){
   assert.ok(i>=0&&j>i,'missing inline '+name);
   return h.slice(i+start.length,j).trim();
 }
-for (const name of ['folio-data.js','assistant.js','payday-runway.js','folio-v2.js','folio-v2.css']) {
+for (const name of ['folio-data.js','assistant.js','payday-runway.js','folio-v2.js','folio-v2.css','folio-flow.js','folio-flow.css','folio-home.js']) {
   assert.equal(inlined(name), fs.readFileSync('android/app/src/main/assets/'+name,'utf8').trim(), name+' bundled into the page');
 }
 assert.equal(fs.readFileSync('android/app/src/main/res/values/strings.xml','utf8').includes('>Folio<'), true);
@@ -269,5 +269,53 @@ assert.ok(upgradeYml.includes('releases/download/v0.2.33/app-release.apk'), 'v0.
 assert.ok(upgradeYml.includes('releases/download/v0.3.46/app-release.apk'), 'schema 1 upgrade uses the published v0.3.46 APK');
 assert.ok(upgradeYml.includes('--expect-old 0.3.46'), 'schema 1 upgrade checks the installed version');
 assert.ok(upgradeDriver.includes('expect_old'), 'the driver can expect a version other than v0.2.33');
+
+const flowHome = boot({
+  demo: false,
+  currency: 'EGP',
+  v2Onboarded: true,
+  transactions: [
+    { id: 'pay', source: 'manual', currency: 'EGP', direction: 'income', amountMinor: 250000, merchant: 'Salary Co', category: 'Salary', occurredAt: Date.now() },
+    { id: 'market', source: 'notification', currency: 'EGP', direction: 'expense', amountMinor: 12550, merchant: 'Carrefour', category: 'Food & drinks', occurredAt: Date.now() },
+    { id: 'usd', source: 'manual', currency: 'USD', direction: 'expense', amountMinor: 8800, merchant: 'Dollar Mart', category: 'Travel', occurredAt: Date.now() }
+  ]
+});
+flowHome.sandbox.window.scrollTo = () => {};
+vm.runInContext("nav('overview')", flowHome.sandbox);
+const homeHtml = flowHome.doc.getElementById('root').innerHTML;
+assert.ok(homeHtml.includes('Where your money goes'), 'home shows where money goes');
+assert.ok(homeHtml.includes('Carrefour'), 'dated spending stays on home');
+assert.ok(homeHtml.includes('Quick add') && homeHtml.includes('Voice entry'), 'home offers quick add and voice');
+assert.ok(homeHtml.includes('prefer offline speech'), 'home says speech prefers offline');
+assert.ok(homeHtml.includes('recognizer may use the network'), 'home says the recognizer may use the network');
+const flowHtml = homeHtml.slice(homeHtml.indexOf('class="panel flow-panel"'), homeHtml.indexOf('v2-overview-entry'));
+assert.ok(flowHtml.includes('Salary Co') && flowHtml.includes('Food &amp; drinks'), 'the flow names this currency only');
+assert.equal(flowHtml.includes('Dollar Mart'), false, 'another currency stays out of the flow');
+assert.equal(flowHtml.includes('Travel'), false, 'another currency category stays out of the flow');
+assert.ok(flowHtml.includes('another currency'), 'the flow says other currencies were left out');
+assert.ok(h.includes('Add transaction') && h.includes('New transaction') && h.includes('Merchant or source'), 'the original transaction dialog stays available');
+
+vm.runInContext('openFastEntry()', flowHome.sandbox);
+const sheet = flowHome.doc.getElementById('modal-root').innerHTML;
+assert.ok(sheet.includes('Save expense') && sheet.includes('Amount keypad'), 'quick add uses its own sheet');
+assert.ok(sheet.includes('Carrefour'), 'recent merchants are offered');
+assert.equal(sheet.includes('Dollar Mart'), false, 'quick add ignores other currencies');
+assert.equal(sheet.includes('Salary Co'), false, 'expense suggestions ignore income merchants');
+vm.runInContext("fastPressKey('1');fastPressKey('2');fastPressKey('.');fastPressKey('5');fastPressKey('0')", flowHome.sandbox);
+assert.equal(flowHome.doc.getElementById('fast-amount').textContent, '12.50');
+flowHome.doc.getElementById('fast-merchant').value = 'Kiosk';
+vm.runInContext("fastPickCategory('Transport');commitFastEntry()", flowHome.sandbox);
+const quickSaved = JSON.parse(flowHome.data.get('folio_finance_v1')).transactions;
+const kiosk = quickSaved.find(entry => entry.merchant === 'Kiosk');
+assert.ok(kiosk, 'quick add stores the expense');
+assert.equal(kiosk.amountMinor, 1250);
+assert.equal(kiosk.direction, 'expense');
+assert.equal(kiosk.category, 'Transport');
+assert.equal(kiosk.currency, 'EGP');
+assert.equal(kiosk.source, 'manual');
+assert.equal(Object.prototype.hasOwnProperty.call(kiosk, 'status'), false, 'quick add leaves status to the ledger rules');
+assert.ok(flowHome.doc.getElementById('toast-region').innerHTML.includes('Undo'), 'a saved quick add can be undone');
+vm.runInContext('undoFastEntry()', flowHome.sandbox);
+assert.equal(JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.some(entry => entry.merchant === 'Kiosk'), false, 'undo removes the quick add');
 
 console.log('PASS bundled interface and tracking setup checks');

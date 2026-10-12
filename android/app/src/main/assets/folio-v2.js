@@ -150,24 +150,52 @@
     render();
   }
   function cancelDraft(){draft=null;message('No changes made.');render();}
-  function chooseLocale(locale){voiceLocale=locale;render();}
+  function chooseLocale(locale){if(locale!=='ar-EG'&&locale!=='en-US')return;voiceLocale=locale;render();}
+  function currentVoiceLocale(){return voiceLocale;}
   function requestVoice(){
     showPrivacySheet=true;render();
   }
   function closeSheet(){showPrivacySheet=false;render();}
+  function voiceNetworkNotice(){
+    return "Folio asks Android to prefer offline recognition. This app has no internet permission and does not send audio anywhere. If this phone has no offline speech pack, the device's own recognizer may still send audio to its provider over the network. You will see a draft and nothing is saved until you confirm.";
+  }
   function beginVoice(){
     showPrivacySheet=false;
     render();
-    if(!native()||typeof FolioNative.startVoiceRecognition!=='function'){message('Voice input requires the installed Android app and a compatible speech recognition provider. You can type instead.');render();return;}
+    if(!native()||typeof FolioNative.startVoiceRecognition!=='function'){
+      const note='Voice input requires the installed Android app and a compatible speech recognition provider. You can type instead. Nothing was saved.';
+      message(note);
+      if(typeof notify==='function')notify(note);
+      render();
+      return;
+    }
     try{FolioNative.startVoiceRecognition(voiceLocale);}
-    catch(e){message('Speech recognition is unavailable. Please type your request.');render();}
+    catch(e){
+      const note='Speech recognition is unavailable. Please type your request. Nothing was saved.';
+      message(note);
+      if(typeof notify==='function')notify(note);
+      render();
+    }
   }
   function onVoiceResult(text,error){
-    if(error){message(error);render();return;}
-    const input=$('folio-assistant-input');
-    if(page!=='assistant')page='assistant';
+    if(error){
+      message(error);
+      if(typeof notify==='function')notify(error);
+      render();
+      return;
+    }
+    const plan=function(spoken){return window.FolioAssistant?FolioAssistant.planCommand(spoken,assistantLedger()):planCommand(spoken);};
+    const accepted=window.FolioFlow&&typeof FolioFlow.acceptVoiceTranscript==='function'?FolioFlow.acceptVoiceTranscript(text,plan):null;
+    if(!accepted||!accepted.ok){render();return;}
+    page='assistant';
+    message(accepted.spoken,'user');
+    message(accepted.answer||'Review this before anything is saved.');
+    draft=accepted.draft||null;
     render();
-    const target=$('folio-assistant-input');if(target){target.value=String(text||'').slice(0,500);target.focus();}
+    const target=$('folio-assistant-input');
+    if(target){target.value=accepted.spoken;target.focus();}
+    const box=$('assistant-chat');
+    if(box)box.scrollTop=box.scrollHeight;
   }
   function onNav(name){page=name;render();}
   function markReady(){state.v2Onboarded=true;persist();stage=0;render();}
@@ -237,15 +265,16 @@
       <div class="v2-assistant">${snapshots}
       <div class="v2-chat-shell">${chat}
       ${draft?`<div class="v2-action-review"><span>REVIEW BEFORE SAVING</span><strong>${h(draft.title)}</strong><div class="v2-action-line"><button onclick="FolioV2.cancelDraft()" class="v2-outline">Cancel</button><button onclick="FolioV2.applyDraft()" class="v2-next">Confirm & save</button></div></div>`:''}
-      <div class="v2-compose"><textarea id="folio-assistant-input" rows="2" maxlength="500" placeholder="Ask about your money, or record a transaction..." aria-label="Message Folio"></textarea><div class="v2-compose-bottom"><div><button class="v2-mic" onclick="FolioV2.requestVoice()" title="Voice to text" aria-label="Voice to text">🎙 Voice</button><button class="v2-locale ${voiceLocale==='en-US'?'sel':''}" onclick="FolioV2.chooseLocale('en-US')">EN</button><button class="v2-locale ${voiceLocale==='ar-EG'?'sel':''}" onclick="FolioV2.chooseLocale('ar-EG')">AR</button></div><button class="v2-next" onclick="FolioV2.submitText()">Send ↗</button></div></div></div>
+      <div class="v2-compose"><textarea id="folio-assistant-input" rows="2" maxlength="500" placeholder="Ask about your money, or record a transaction..." aria-label="Message Folio"></textarea><div class="v2-compose-bottom"><div><button class="v2-mic" onclick="FolioV2.requestVoice()" title="Voice entry" aria-label="Voice entry">Voice entry</button><button class="v2-locale ${voiceLocale==='en-US'?'sel':''}" onclick="FolioV2.chooseLocale('en-US')">EN</button><button class="v2-locale ${voiceLocale==='ar-EG'?'sel':''}" onclick="FolioV2.chooseLocale('ar-EG')">AR</button></div><button class="v2-next" onclick="FolioV2.submitText()">Send ↗</button></div></div></div>
       <div class="v2-example-row"><button onclick="FolioV2.sendExample('I have 20000 in my bank')">Set my balance</button><button onclick="FolioV2.sendExample('My monthly budget is 5000')">Set a budget</button><button onclick="FolioV2.sendExample('How am I doing?')">Monthly overview</button><button onclick="FolioV2.sendExample('Can I afford 1500?')">Can I afford it?</button></div>
       <p class="v2-disclaimer">Folio's current assistant uses local rules, not a cloud AI model. Its calculations rely on your recorded data and may be incomplete. Verify balances and upcoming commitments before spending.</p></div>`;
   }
   function privacySheet(){
     return `<div class="v2-scrim" role="presentation"><section role="dialog" aria-modal="true" class="v2-privacy-sheet" aria-label="Speech input information">
     <button class="v2-close" aria-label="Close" onclick="FolioV2.closeSheet()">×</button>
-    <span class="v2-eyebrow">VOICE INPUT</span><h2>Talk to Folio</h2><p>Android's speech recognition provider converts your voice into text. Depending on your device, audio may be processed online by that provider. Folio doesn't store the audio recording.</p>
-    <p>Review the transcript and approve each proposed financial change before it is saved.</p>
+    <span class="v2-eyebrow">VOICE INPUT</span><h2>Talk to Folio</h2><p>${voiceNetworkNotice()}</p>
+    <div class="capture-locales" role="group" aria-label="Voice language"><button type="button" class="v2-locale ${voiceLocale==='en-US'?'sel':''}" onclick="FolioV2.chooseLocale('en-US')">English</button><button type="button" class="v2-locale ${voiceLocale==='ar-EG'?'sel':''}" onclick="FolioV2.chooseLocale('ar-EG')">العربية</button></div>
+    <p>Review the parsed draft and approve each financial change before it is saved. Cancelling the recognizer saves nothing.</p>
     <button class="v2-next" onclick="FolioV2.beginVoice()">Continue with voice →</button><button class="v2-back" onclick="FolioV2.closeSheet()">Not now</button></section></div>`;
   }
   function render(){
@@ -262,7 +291,7 @@
   state.monthlyIncomeMinor=Number(state.monthlyIncomeMinor)||0;
   if(!Number.isFinite(state.reportedBalanceMinor))state.reportedBalanceMinor=null;
   if(!Number.isFinite(state.balanceReportedAt))state.balanceReportedAt=null;
-  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,onVoiceResult,chooseLocale,explainAccess,estimatedBalance,financeSummary};
+  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,financeSummary,voiceNetworkNotice};
   window.folioGoHome=()=>{if(!state.v2Onboarded){previousStep();return;}onNav('overview');};
   render();
 })();
