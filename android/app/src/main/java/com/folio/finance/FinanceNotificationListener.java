@@ -4,7 +4,6 @@ import android.os.Bundle;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import org.json.JSONObject;
-import java.util.UUID;
 /** Processes new notifications only after opt-in. Never saves message bodies. */
 public final class FinanceNotificationListener extends NotificationListenerService {
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
@@ -21,15 +20,14 @@ public final class FinanceNotificationListener extends NotificationListenerServi
             String title=String.valueOf(extras.getCharSequence(Notification.EXTRA_TITLE,""));
             CharSequence expanded=extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
             String body=expanded!=null?expanded.toString():String.valueOf(extras.getCharSequence(Notification.EXTRA_TEXT,""));
-            if(body.isBlank()) {
+            if(body.trim().isEmpty()) {
                 CharSequence[] lines=extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES);
                 if(lines!=null&&lines.length>0&&lines[lines.length-1]!=null)body=lines[lines.length-1].toString();
             }
-            if(body.isBlank()){NativeStore.note(this,"empty");return;}
+            if(body.trim().isEmpty()){NativeStore.note(this,"empty");return;}
             TransactionParser.ParsedTransaction tx=TransactionParser.parse(title,body);
             if(tx==null){NativeStore.note(this,"unrecognized");return;}
             JSONObject item=new JSONObject();
-            item.put("id",UUID.randomUUID().toString());
             item.put("amountMinor",tx.amountMinor);
             item.put("currency",tx.currency);
             item.put("direction",tx.direction);
@@ -39,7 +37,8 @@ public final class FinanceNotificationListener extends NotificationListenerServi
             item.put("sourcePackage",source);
             item.put("occurredAt",sbn.getPostTime());
             item.put("review",true);
-            NativeStore.enqueue(this,item,source+"|"+title+"|"+body);
+            String content=TransactionParser.normalize((title==null?"":title)+"\n"+body);
+            if(!NativeStore.enqueue(this,item,content)){NativeStore.note(this,"duplicate");return;}
             NativeStore.note(this,"recognized");
         }catch(Exception ignored){}
     }

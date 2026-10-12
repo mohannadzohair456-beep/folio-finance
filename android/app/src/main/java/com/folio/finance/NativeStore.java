@@ -4,9 +4,9 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.security.MessageDigest;
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /** Local queue: stores only parsed financial fields, not raw notification content. */
@@ -59,6 +59,7 @@ final class NativeStore {
         SharedPreferences.Editor e=p.edit();
         e.putInt("diag_allowed",p.getInt("diag_allowed",0)+1);
         if("recognized".equals(result))e.putInt("diag_parsed",p.getInt("diag_parsed",0)+1);
+        if("duplicate".equals(result))e.putInt("diag_duplicate",p.getInt("diag_duplicate",0)+1);
         if("unrecognized".equals(result)||"empty".equals(result))e.putInt("diag_unrecognized",p.getInt("diag_unrecognized",0)+1);
         e.putLong("diag_last_at",System.currentTimeMillis()).putString("diag_last_result",result).apply();
     }
@@ -67,6 +68,7 @@ final class NativeStore {
         try{
             o.put("allowed",p.getInt("diag_allowed",0));
             o.put("parsed",p.getInt("diag_parsed",0));
+            o.put("duplicate",p.getInt("diag_duplicate",0));
             o.put("unrecognized",p.getInt("diag_unrecognized",0));
             o.put("lastAt",p.getLong("diag_last_at",0));
             o.put("lastResult",p.getString("diag_last_result",""));
@@ -78,17 +80,63 @@ final class NativeStore {
         for (int i=0; i<a.length(); i++) if (pkg.equals(a.optString(i))) return true;
         return false;
     }
-    static synchronized void enqueue(Context c, JSONObject transaction, String signature) {
+    /** @return false when this alert repeats a movement already accepted. Raw text is not stored. */
+    static synchronized boolean enqueue(Context c, JSONObject transaction, String normalizedContent) {
         SharedPreferences p = prefs(c);
         long now = System.currentTimeMillis();
         try {
-            String key = sha256(signature);
-            if (key.equals(p.getString("last_sig", "")) && now-p.getLong("last_at",0)<120000) return;
-            JSONArray queue = getPending(c); queue.put(transaction);
+            List<IngestionDedup.Seen> prior = readSeen(p.getString("dedup_seen", "[]"));
+            IngestionDedup.Verdict verdict = IngestionDedup.evaluate(prior, now,
+                    transaction.optLong("amountMinor"), transaction.optString("currency"),
+                    transaction.optString("direction"), transaction.optString("merchant"), normalizedContent);
+            SharedPreferences.Editor editor = p.edit().putString("dedup_seen", writeSeen(verdict.retained));
+            if (verdict.duplicate) {
+                editor.apply();
+                return false;
+            }
+            transaction.put("id", verdict.id);
+            transaction.put("dedupKey", verdict.semanticKey);
+            JSONArray queue = getPending(c);
+            queue.put(transaction);
             JSONArray capped = new JSONArray();
-            for (int i=Math.max(0,queue.length()-400); i<queue.length(); i++) capped.put(queue.get(i));
-            p.edit().putString("queue", capped.toString()).putString("last_sig",key).putLong("last_at",now).apply();
+            for (int i = Math.max(0, queue.length() - 400); i < queue.length(); i++) capped.put(queue.get(i));
+            editor.putString("queue", capped.toString()).apply();
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+    private static List<IngestionDedup.Seen> readSeen(String json) {
+        ArrayList<IngestionDedup.Seen> out = new ArrayList<>();
+        try {
+            JSONArray rows = new JSONArray(json);
+            for (int i = 0; i < rows.length(); i++) {
+                JSONObject row = rows.optJSONObject(i);
+                if (row == null) continue;
+                out.add(new IngestionDedup.Seen(row.optString("c"), row.optString("k"), row.optString("m"),
+                        row.has("r") && !row.isNull("r") ? row.optString("r") : null,
+                        row.optLong("t"), row.optString("id")));
+            }
         } catch (Exception ignored) { }
+        return out;
+    }
+    private static String writeSeen(List<IngestionDedup.Seen> rows) {
+        JSONArray out = new JSONArray();
+        if (rows != null) {
+            for (IngestionDedup.Seen seen : rows) {
+                JSONObject row = new JSONObject();
+                try {
+                    row.put("c", seen.contentHash);
+                    row.put("k", seen.semanticKey);
+                    row.put("m", seen.merchant);
+                    if (seen.reference != null) row.put("r", seen.reference);
+                    row.put("t", seen.at);
+                    row.put("id", seen.id);
+                    out.put(row);
+                } catch (Exception ignored) { }
+            }
+        }
+        return out.toString();
     }
     static synchronized void ack(Context c, String idsJson) {
         try {
@@ -102,10 +150,4 @@ final class NativeStore {
             prefs(c).edit().putString("queue", keep.toString()).apply();
         } catch (Exception ignored) { }
     }
-    private static String sha256(String s) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
-            StringBuilder b=new StringBuilder();for(byte d:digest)b.append(String.format("%02x",d & 255));return b.toString();
-        } catch (Exception ignored) { return String.valueOf(s.hashCode()); }
     }
-}
