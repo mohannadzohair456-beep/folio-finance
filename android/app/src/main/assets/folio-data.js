@@ -4,6 +4,9 @@
    Schema 2: each transaction has status suggested, confirmed, rejected, or
    duplicate-candidate. Existing rows become confirmed. A notification row
    flagged review:true becomes suggested. Budgets are not converted again.
+   Auto-confirm does not rewrite stored statuses. alwaysReviewNotifications
+   and balanceObservations are optional and default to off and empty. A bank
+   message can note a stated balance; it does not replace a balance the user entered.
    Planning fields monthlyBudgetMinor, monthlyIncomeMinor and reportedBalanceMinor
    were already minor units before schema 1 and are never multiplied again. */
 (function (root) {
@@ -51,7 +54,9 @@
       gameya: null,
       commitments: null,
       savingsReservedMinor: null,
-      emergencyReserveMinor: null
+      emergencyReserveMinor: null,
+      alwaysReviewNotifications: false,
+      balanceObservations: []
     };
   }
 
@@ -312,6 +317,8 @@
       state.legacyBalanceReportedAt = clone(input.balanceReportedAt);
     }
     state.balanceUntracked = input.balanceUntracked === true;
+    state.alwaysReviewNotifications = input.alwaysReviewNotifications === true;
+    state.balanceObservations = coerceObservations(input.balanceObservations);
     assignAccounts(state, input);
 
     const monthlyBudget = finiteMinor(input.monthlyBudgetMinor);
@@ -345,6 +352,91 @@
     assignRunway(state, input);
     if (state.v2Onboarded !== true && storedWorkspaceHasLedger(state)) state.v2Onboarded = true;
     return { state: state, snapshot: snapshot, migrated: needsMigration };
+  }
+
+  function coerceObservations(list) {
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (let i = 0; i < list.length && out.length < 30; i++) {
+      const row = list[i];
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+      const amount = finiteMinor(row.amountMinor);
+      const currency = canonicalCurrency(row.currency);
+      const at = transactionTime(row.observedAt);
+      if (amount == null || !currency || at == null) continue;
+      out.push({
+        amountMinor: amount,
+        currency: currency,
+        observedAt: at,
+        source: 'notification',
+        provenance: 'notification'
+      });
+    }
+    return out;
+  }
+
+  function rememberStatedBalance(state, observation) {
+    if (!state || !observation) return false;
+    const amount = finiteMinor(observation.amountMinor);
+    const currency = canonicalCurrency(observation.currency);
+    const at = transactionTime(observation.observedAt);
+    if (amount == null || !currency || at == null) return false;
+    const reported = state.reportedBalanceMinor;
+    const reportedAt = state.balanceReportedAt;
+    if (!Array.isArray(state.balanceObservations)) state.balanceObservations = [];
+    const row = {
+      amountMinor: amount,
+      currency: currency,
+      observedAt: at,
+      source: 'notification',
+      provenance: 'notification'
+    };
+    const last = state.balanceObservations[state.balanceObservations.length - 1];
+    if (last && last.amountMinor === row.amountMinor && last.currency === row.currency && last.observedAt === row.observedAt) return false;
+    state.balanceObservations.push(row);
+    if (state.balanceObservations.length > 30) state.balanceObservations = state.balanceObservations.slice(-30);
+    state.reportedBalanceMinor = reported;
+    state.balanceReportedAt = reportedAt;
+    return true;
+  }
+
+  function merchantKey(value) {
+    return String(value == null ? '' : value).toLowerCase().replace(/[^a-z0-9\u0600-\u06ff ]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function merchantsLooselySame(left, right) {
+    const a = merchantKey(left);
+    const b = merchantKey(right);
+    if (!a || !b) return false;
+    if (a === 'card payment' || a === 'incoming transfer' || b === 'card payment' || b === 'incoming transfer') return false;
+    if (a === b) return true;
+    return a.length >= 4 && b.length >= 4 && (a.indexOf(b) >= 0 || b.indexOf(a) >= 0);
+  }
+
+  /* High confidence, one clear amount, and not a possible duplicate can be
+     confirmed. Everything else stays on the review list. Stored rows are not
+     passed through this function during migration. */
+  function notificationIntake(transactions, incoming, alwaysReview) {
+    const amount = Number(incoming && incoming.amountMinor);
+    const direction = incoming && incoming.direction;
+    const currency = incoming && incoming.currency;
+    const when = transactionTime(incoming && incoming.occurredAt);
+    const high = !!(incoming && incoming.confidence === 'high' && incoming.ambiguous !== true && incoming.ambiguous !== 'true');
+    let duplicate = false;
+    if (Number.isFinite(amount) && when != null && Array.isArray(transactions)) {
+      for (let i = 0; i < transactions.length; i++) {
+        const row = transactions[i];
+        if (!row || row.id === incoming.id) continue;
+        if (transactionStatus(row) === 'rejected') continue;
+        if (Number(row.amountMinor) !== amount || row.currency !== currency || row.direction !== direction) continue;
+        const rowWhen = transactionTime(row.occurredAt);
+        if (rowWhen == null || Math.abs(rowWhen - when) > 24 * 60 * 60 * 1000) continue;
+        if (merchantsLooselySame(row.merchant, incoming.merchant)) duplicate = true;
+      }
+    }
+    if (duplicate) return { status: 'duplicate-candidate', review: true, autoConfirmed: false };
+    if (alwaysReview === true || !high) return { status: 'suggested', review: true, autoConfirmed: false };
+    return { status: 'confirmed', review: false, autoConfirmed: true };
   }
 
   function coerceAccount(entry, index) {
@@ -682,6 +774,8 @@
     balanceFreshness: balanceFreshness,
     untrackedMovement: untrackedMovement,
     transactionStatus: transactionStatus,
+    rememberStatedBalance: rememberStatedBalance,
+    notificationIntake: notificationIntake,
     summarize: summarize,
     budgetTotalMinor: budgetTotalMinor,
     buildBackup: buildBackup,

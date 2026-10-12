@@ -467,7 +467,8 @@ check('payday runway flag explains can_afford and safe_to_spend with numbers', (
   assert.equal(safe.details.available_now_minor, 14000);
   assert.equal(safe.details.unconfirmed_net_minor, -5000);
   assert.match(safe.explanation, /available now/i);
-  assert.match(safe.explanation, /Unconfirmed notification/);
+  assert.match(safe.explanation, /waiting for review/);
+  assert.match(safe.explanation, /auto-confirmed/i);
   assert.equal(safe.details.status, 'ok');
   assert.equal(safe.details.per_day_minor, 1000);
   assert.match(safe.explanation, /EGP 140\.00/);

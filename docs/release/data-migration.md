@@ -46,7 +46,9 @@ Other ways a real phone rejects the file while an emulator might not:
 - The phone is below Android 8. `minSdk` is 26.
 - Someone installs the legacy `com.folio.finance` debug APK and expects it to update the permanent app. They are different packages.
 
-There is still no `INTERNET` permission. `allowBackup` stays false, so uninstall or clearing storage deletes the books unless a JSON or CSV copy exists.
+Schema stays 2. `alwaysReviewNotifications` and `balanceObservations` are optional. A missing setting is off, and a missing observation list is empty. A transaction that is already `suggested` stays `suggested`. A notification balance note does not replace `reportedBalanceMinor` or an account balance.
+
+There is still no `INTERNET` permission. `RECORD_AUDIO` is the microphone for on-device speech recognition. `allowBackup` stays false, so uninstall or clearing storage deletes the books unless a JSON or CSV copy exists.
 
 ## Emulator upgrade
 

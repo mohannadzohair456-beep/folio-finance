@@ -1,3 +1,13 @@
+# Unreleased — notification amount, auto-confirm, voice
+
+Not a published tag. `applicationId` stays `com.folio.finance.app`. The signing pin is unchanged. There is still no `INTERNET` permission. Schema stays 2.
+
+- A bank or wallet alert records the transaction amount, not the remaining balance. An unclear pair of amounts is left for review. A stated balance can be kept as a note and is not a confirmed balance.
+- A clear high-confidence alert is saved as confirmed and counts immediately. Low confidence, an ambiguous amount, and a possible duplicate stay on the review list. Settings can turn on "Always review notifications". Rows that are already suggested stay suggested.
+- Voice asks for the microphone, prefers offline Arabic (`ar-EG`) and English recognition, and shows a specific bilingual message when the offline pack is missing. The system speech screen is optional and runs in another app, which may use the network. A transcript is still confirmed before it is saved. See [voice-privacy.md](../architecture/voice-privacy.md).
+
+The device-upgrade gate and a real phone are not part of this note.
+
 # Folio v0.3.40
 
 Published release: https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.40

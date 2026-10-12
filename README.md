@@ -36,7 +36,7 @@ Notification capture is optional.
 4. Messages packages are on the allowlist by default. A bank app is included only after you add its package name.
 5. Folio reads new notifications from those packages. It does not read history, and it does not store the raw notification text.
 
-Speech recognition, if you use the microphone button, is the device recognizer. That recognizer may send audio to its own provider. Folio does not add a network permission.
+Speech recognition, if you use the microphone button, asks Android to prefer offline recognition and requests the microphone at runtime. Folio does not add a network permission. If this phone cannot recognize speech offline, the app says so in English and Arabic. Opening the system speech screen runs in another app, which may send audio to its provider. The transcript is a draft until you confirm it. Details are in [docs/architecture/voice-privacy.md](docs/architecture/voice-privacy.md).
 
 ## Build
 

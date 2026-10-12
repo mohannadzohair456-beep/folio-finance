@@ -36,7 +36,14 @@ public final class FinanceNotificationListener extends NotificationListenerServi
             item.put("source","notification");
             item.put("sourcePackage",source);
             item.put("occurredAt",sbn.getPostTime());
-            item.put("review",true);
+            item.put("confidence", tx.confidence);
+            item.put("ambiguous", tx.ambiguous);
+            // The page decides confirmed versus review. A missing confidence stays in review.
+            item.put("review", !"high".equals(tx.confidence) || tx.ambiguous);
+            if (tx.statedBalanceMinor != null) {
+                item.put("statedBalanceMinor", tx.statedBalanceMinor.longValue());
+                item.put("statedBalanceCurrency", tx.statedBalanceCurrency == null ? tx.currency : tx.statedBalanceCurrency);
+            }
             String content=TransactionParser.normalize((title==null?"":title)+"\n"+body);
             if(!NativeStore.enqueue(this,item,content)){NativeStore.note(this,"duplicate");return;}
             NativeStore.note(this,"recognized");

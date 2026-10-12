@@ -762,7 +762,7 @@
         { id: 'emergency_buffer', label: 'Emergency buffer', amount_minor: -emergency.value, included: true },
         { id: 'planned_payday', label: 'Planned payday income', amount_minor: paydayAmount.value, included: false },
         { id: 'gam_eya_payouts', label: "Gam'eya payouts", amount_minor: sums.payout, included: false },
-        { id: 'unconfirmed_notifications', label: 'Unconfirmed notification transactions', amount_minor: txSums.unconfirmedNet, included: false }
+        { id: 'unconfirmed_notifications', label: 'Notifications waiting for review', amount_minor: txSums.unconfirmedNet, included: false }
       ],
       bills_due: billsDue,
       unconfirmed_transactions: txSums.unconfirmed,
