@@ -4,7 +4,7 @@
 
 `applicationId` stays `com.folio.finance.app`. An upgrade signed with the pinned certificate keeps the WebView profile, so `folio_finance_v1` is still there on first launch. The page migrates it to schema 1, converts category budgets into minor units, and writes the pre-migration snapshot described in [data-model.md](../architecture/data-model.md). Transactions are not deleted because they were incomplete.
 
-versionCode for this line is `100 + FOLIO_VERSION_CODE`. Published releases v0.2.1 through v0.2.33 used `versionCode == GitHub run_number`, and 33 is the highest of those. A local build with no env var is versionCode 100. CI passes `github.run_number`, so the next main build is `100 + run_number` (134 if the next run is 34). Either number installs over versionCode 33. versionName on CI is `0.3.<run_number>`.
+versionCode for this line is `100 + FOLIO_VERSION_CODE`. Published releases v0.2.1 through v0.2.33 used `versionCode == GitHub run_number`, and 33 is the highest of those. A local build with no env var is versionCode 100. CI passes `github.run_number`. The published release [v0.3.40](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.40) is versionCode 140 (`100 + 40`) and versionName `0.3.40`. That installs over versionCode 33.
 
 The old debug package `com.folio.finance` is a different app. Its WebView data does not move. Export CSV from that app and import it here. Then enter balances, salary, and budgets, and export JSON.
 
@@ -34,7 +34,9 @@ The release is signed with alias `folio` and the pinned certificate `126a716dad1
 
 AGP 8.7 does not write a JAR (v1) signature when `minSdk` is 24 or higher, even with `enableV1Signing` set. The main workflow re-signs the assembled APK with `apksigner sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --min-sdk-version 23`. That flag only asks for the JAR signature. The manifest `minSdk` stays 26. CI then requires v1, v2, and v3 from `apksigner verify --min-sdk-version 23`, and v2 plus v3 from `--min-sdk-version 26`.
 
-CI runs `apksigner verify --verbose --print-certs`, checks the pinned certificate before and after the build, requires v1, v2, and v3 (`apksigner verify --verbose --min-sdk-version 26`), runs `zipalign -c -v 4` and `zipalign -c -p 4`, and checks that `resources.arsc` is stored rather than deflated. The Gradle build zipaligns before signing. Do not unzip and re-zip the APK after that. Doing so breaks the v2 digest and phones then refuse the file.
+A plain `apksigner verify` uses the manifest minSdk. On this APK that printout says v1 is false and v2 and v3 are true, and the command still exits 0. The JAR files (`META-INF/FOLIO.SF`, `META-INF/FOLIO.RSA`, `META-INF/MANIFEST.MF`) are in the zip. v1 reports true only when the verifier is asked to judge the file as minSdk 23. API 26 devices use v2 and v3.
+
+CI also runs `apksigner verify --verbose --print-certs`, checks the pinned certificate before and after the build, runs `zipalign -c -v 4` and `zipalign -c -p 4` on the re-signed file, and checks that `resources.arsc` is stored rather than deflated. `apksigner sign` keeps zip alignment. Do not unzip and re-zip the APK after signing. Doing so breaks the v2 digest and phones then refuse the file.
 
 Other ways a real phone rejects the file while an emulator might not:
 
@@ -48,4 +50,6 @@ There is still no `INTERNET` permission. `allowBackup` stays false, so uninstall
 
 ## Emulator upgrade
 
-Not executed in this workspace. There is no Android SDK or emulator image here, and there is no access to `FOLIO_KEYSTORE_B64`. An unsigned or differently signed build cannot be installed over the release-signed v0.2.33 APK. That would reproduce the signature conflict, not prove data survival. Migration of the localStorage payload is covered by `tests/money.test.cjs` and `tests/ui.test.cjs` instead.
+The in-place upgrade was not executed. This workspace has `/dev/kvm` and no Android SDK, `adb`, or system image, and it has no access to `FOLIO_KEYSTORE_B64`. An unsigned or differently signed build cannot be installed over the release-signed v0.2.33 APK. That would reproduce the signature conflict, not prove data survival. Migration of the localStorage payload is covered by `tests/money.test.cjs` and `tests/ui.test.cjs` instead.
+
+A separate GitHub job, [38213352659](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38213352659), installed two different packages on an Android 10 emulator: the old debug app `com.folio.finance` (versionCode 26) and `com.folio.finance.app` versionCode 140 from the v0.3.40 asset. Both packages were present and the permanent app process started. That job does not install v0.2.33, does not enter transactions, a budget, or a balance, and does not upgrade one install of `com.folio.finance.app`.
