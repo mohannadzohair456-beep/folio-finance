@@ -62,7 +62,9 @@ The `google_apis` API 26 image's WebView is Chrome 69.0.3497.100 (`com.android.c
 
 API 34 in the same run completed `UPGRADE_DATA_SURVIVED`. API 35 filled 8420.50, 15000, and 9000, then the Continue button was clipped at y=1897 on a 1920px screen and the tap missed. That is a driver miss, not a missing field. The driver now treats a hit point in the bottom 140px as a miss and nudges the page up before tapping. A green `v0233-page-on-api26` job prints `V0233_UI_BLANK` and is not a data-survival pass.
 
-Cold-start TotalTime for signed v0.3.43 is recorded by `cold-launch-latency` on API 26, 34, and 35. The millisecond table in `docs/operations/performance-baseline.md` stays empty until those artifacts are inspected. No latency number from run 38248427070 is copied forward, because that run's API 34 and API 35 samples were not accepted by the older parser.
+Cold-start TotalTime for signed v0.3.43 is recorded by `cold-launch-latency` on API 26, 34, and 35. No latency number from run 38248427070 is copied forward, because that run's API 34 and API 35 samples were not accepted by the older parser.
+
+Run [38255733542](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38255733542) on head `a981ac3` (checkout merge `61b8b289`) is the baseline. `latency.txt` TotalTime medians for v0.3.43 are 923 ms on API 26, 1455 ms on API 34, and 2188 ms on API 35. API 34's content poll printed `LATENCY_WEBVIEW_CONTENT_FAILED` and has no content time. `v0233-page-on-api26` printed `V0233_UI_BLANK 0.2.33 33 sdk 26`. `upgrade-from-v0233` on API 34 and API 35 printed `UPGRADE_DATA_SURVIVED 0.3.61 161`. `clean-launch` on API 26 and API 35 printed `LAUNCH_OK 0.3.61 161`. The figures and the runner image `ubuntu24` `20261004.327.1` are in `docs/operations/performance-baseline.md`. A green API 26 blank job is not a data-survival pass.
 
 ## Not done
 
