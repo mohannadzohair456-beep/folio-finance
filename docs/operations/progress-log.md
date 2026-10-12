@@ -40,7 +40,13 @@ Schema is now 2. Category budgets still convert from major units only when the s
 
 The existing auto-detected review row now has Confirm, Reject, and Edit. Confirm and reject record `reviewedAt` and clear the review flag. Edit opens the current transaction form, keeps the notification source, and saves the row as confirmed. The parser and the notification dedup rules are unchanged. P0.3, per-account balance freshness, is not in this change.
 
-The signed release that contains schema 2 is upgraded from two installed apps: v0.2.33, and the schema-1 release v0.3.46. Both jobs enter a balance, a Carrefour transaction, and a Food budget on the old app, then read those values back after the upgrade. v0.3.46 stays pinned because `releases/latest` becomes the schema-2 APK once that build is published. An existing `folio_finance_premigration_snapshot` is not replaced. A schema-1 workspace that has no snapshot gets one on the first schema-2 open, and the next open leaves it. The page JavaScript does not use `?.` or `??`, which the Android 8 WebView cannot parse.
+The signed release that contains schema 2 is upgraded from two installed apps: v0.2.33, and the schema-1 release v0.3.46. Both jobs enter a balance, a Carrefour transaction, and a Food budget on the old app, then read those values back after the upgrade. v0.3.46 stays pinned as that schema-1 APK. An existing `folio_finance_premigration_snapshot` is not replaced. A schema-1 workspace that has no snapshot gets one on the first schema-2 open, and the next open leaves it. The page JavaScript does not use `?.` or `??`, which the Android 8 WebView cannot parse.
+
+## Update — 12 Oct 2026, promote a release only after the device upgrade
+
+The schema 2 build of `dbb1895` published v0.3.50 and marked it latest before the device upgrade finished: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38250844863. That upgrade then passed on both paths, v0.2.33 and schema-1 v0.3.46, and the clean launches on API 26 and API 35 passed: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38250977426. v0.3.50 stays the latest release.
+
+Later main builds publish as prereleases and do not replace `releases/latest`. The device upgrade installs that tag. When the v0.2.33 path and the schema-1 path both pass, the workflow clears the prerelease flag and makes that tag latest. When either path fails, the workflow marks the tag as a prerelease and clears latest, so `releases/latest` stays on the last promoted release. The signing identity is unchanged. P0.3 is still a separate change.
 
 ## Not done
 
