@@ -48,7 +48,17 @@
       balanceReportedAt: null,
       v2Onboarded: false,
       legacyUnparsedBudgets: [],
-      legacyQueue: []
+      legacyQueue: [],
+      experimentalPaydayRunway: false,
+      paydayDate: null,
+      paydayAmountMinor: null,
+      paydayCurrency: null,
+      upcomingBills: null,
+      installments: null,
+      gameya: null,
+      commitments: null,
+      savingsReservedMinor: null,
+      emergencyReserveMinor: null
     };
   }
 
@@ -285,7 +295,56 @@
       return coerceTransaction(entry, index);
     }).filter(Boolean);
     state.legacyQueue = Array.isArray(input.legacyQueue) ? clone(input.legacyQueue) : [];
+    assignRunway(state, input);
     return { state: state, snapshot: snapshot, migrated: needsMigration };
+  }
+
+  function strictMinor(value) {
+    if (value == null || value === '') return { value: null, invalid: false };
+    if (typeof value === 'number' && Number.isSafeInteger(value)) return { value: value, invalid: false };
+    return { value: null, invalid: true };
+  }
+
+  function assignList(state, input, key, legacyKey) {
+    if (input[key] == null) {
+      state[key] = null;
+      return;
+    }
+    if (Array.isArray(input[key])) {
+      state[key] = clone(input[key]);
+      return;
+    }
+    state[key] = null;
+    state[legacyKey] = clone(input[key]);
+  }
+
+  function assignNonNegative(state, input, key, legacyKey) {
+    const parsed = strictMinor(input[key]);
+    if (parsed.invalid || (parsed.value != null && parsed.value < 0)) {
+      state[key] = null;
+      if (input[key] != null && input[key] !== '') state[legacyKey] = clone(input[key]);
+      return;
+    }
+    state[key] = parsed.value;
+  }
+
+  /* New optional fields. Schema stays 1. Null means the user has not answered;
+     an empty list means they confirmed there is nothing. */
+  function assignRunway(state, input) {
+    state.experimentalPaydayRunway = input.experimentalPaydayRunway === true;
+    state.paydayDate = typeof input.paydayDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.paydayDate) ? input.paydayDate : null;
+    if (input.paydayDate != null && input.paydayDate !== '' && state.paydayDate == null) state.legacyPaydayDate = clone(input.paydayDate);
+    const paydayAmount = strictMinor(input.paydayAmountMinor);
+    state.paydayAmountMinor = paydayAmount.invalid || paydayAmount.value == null || paydayAmount.value < 0 ? null : paydayAmount.value;
+    if (input.paydayAmountMinor != null && input.paydayAmountMinor !== '' && state.paydayAmountMinor == null) state.legacyPaydayAmount = clone(input.paydayAmountMinor);
+    state.paydayCurrency = canonicalCurrency(input.paydayCurrency);
+    if (input.paydayCurrency != null && input.paydayCurrency !== '' && state.paydayCurrency == null) state.legacyPaydayCurrency = clone(input.paydayCurrency);
+    assignList(state, input, 'upcomingBills', 'legacyUpcomingBills');
+    assignList(state, input, 'installments', 'legacyInstallments');
+    assignList(state, input, 'gameya', 'legacyGameya');
+    assignList(state, input, 'commitments', 'legacyCommitments');
+    assignNonNegative(state, input, 'savingsReservedMinor', 'legacySavingsReserved');
+    assignNonNegative(state, input, 'emergencyReserveMinor', 'legacyEmergencyReserve');
   }
 
   function summarize(records, primaryCurrency) {
@@ -647,7 +706,7 @@ function insights(){let curr=monthTx(),s=txStats(curr),parts=catTotals(curr),tot
  return `${heading('UNDERSTAND THE BIG PICTURE','Financial insights','Look beyond transactions. Find the patterns that matter.')}${demoNotice()}<div class="metrics">${metric('Total income',s.income,'in','Current calendar month',true)}${metric('Total expenses',s.expense,'out','Current calendar month')}${`<div class="metric"><div class="metric-top"><span>Savings rate</span><span class="metric-icon">${icon('chart',17)}</span></div><div class="metric-amount">${s.income?Math.round(s.net/s.income*100)+'%':'—'}</div><div class="metric-sub">${s.income?'Net cash flow as a share of income':'Add income to calculate'}</div></div>`}</div><div class="insights-grid"><section class="panel"><div class="panel-heading"><div><h2>Six-month comparison</h2><p>See your income and expenses side by side</p></div></div><div style="display:flex;gap:11px;align-items:flex-end;height:203px;padding-top:14px;border-bottom:1px solid #ecf1ec">${months.map(m=>`<div style="flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px"><div style="flex:1;width:100%;display:flex;gap:4px;align-items:flex-end;justify-content:center"><div title="Income ${h(fmt(m.income,state.currency))}" style="height:${Math.max(m.income?3:0,m.income/maxMonthly*100)}%;width:31%;background:#c3e6b1;border-radius:6px 6px 0 0"></div><div title="Expenses ${h(fmt(m.expense,state.currency))}" style="height:${Math.max(m.expense?3:0,m.expense/maxMonthly*100)}%;width:31%;background:#148568;border-radius:6px 6px 0 0"></div></div><span style="font-size:10px;color:#9cab9f">${m.label}</span></div>`).join('')}</div><div class="chart-legend" style="padding-top:13px"><span><i class="legend-dot" style="background:#c3e6b1"></i> Income</span><span><i class="legend-dot" style="background:#148568"></i> Expenses</span></div></section><section class="panel"><div class="panel-heading"><div><h2>Expense categories</h2><p>Your biggest areas of spending</p></div></div>${parts.length?parts.map(([cat,v])=>`<div class="category-bar"><div class="category-bar-title"><b>${h(cat)}</b><span>${fmt(v,state.currency)}</span></div><div class="progress"><span style="width:${v/max*100}%;background:${COLORS[cat]||'#91ab95'}"></span></div></div>`).join(''):empty('No categories yet','Your breakdown will appear here.')}</section></div><div class="panel" style="margin-top:20px"><div class="panel-heading"><div><h2>A helpful distinction</h2><p>Cash flow is not the same as your bank balance.</p></div>${icon('info',19)}</div><p style="font-size:12px;line-height:1.7;color:#7e9186;margin:0">Folio calculates income minus expenses for recorded transactions. It cannot know your current bank balance without an opening balance or direct account connection. Multiple currencies are never silently added together.</p></div>`;}
 function budgets(){let parts=catTotals(monthTx()), keys=Object.keys(currentBudgets()),spentMap=(function(list){var map={};for(var i=0;i<list.length;i++)map[list[i][0]]=list[i][1];return map;})(parts);let totalLimit=keys.reduce((s,k)=>s+(Number.isFinite(Number(currentBudgets()[k]))?Number(currentBudgets()[k]):0),0),totalSpent=keys.reduce((s,k)=>s+(Number(spentMap[k])||0),0);
  return `${heading('YOUR SPENDING GUARDRAILS','Monthly budgets','Give every category room to breathe.')}${demoNotice()}${otherBudgetNote()}${state.monthlyBudgetMinor>0?`<div class="v2-planning-banner"><span>Overall spending target</span><strong>${fmt(state.monthlyBudgetMinor,state.currency)} / month</strong><small>${fmt(state.monthlyBudgetMinor-txStats(monthTx()).expense,state.currency)} remaining after all recorded expenses. To change it, tell Ask Folio your new monthly budget.</small><button class="v2-plan-edit" onclick="nav('assistant')">Edit with Folio →</button></div>`:''}<div class="metrics">${metric('Total budget',totalLimit,'net','Across all planned categories',true)}${metric('Budgeted spending',totalSpent,'out','Spent in budgeted categories')}${metric('Budget remaining',Math.max(0,totalLimit-totalSpent),'in','Left for the current month')}</div><div class="panel"><div class="panel-heading"><div><h2>Category budgets</h2><p>Adjust your spending limits whenever you like</p></div><button class="secondary" onclick="showBudget()">${icon('plus',15)} Set a budget</button></div>${keys.length?`<div class="budget-lines">${keys.map(cat=>{let limit=Number(currentBudgets()[cat]),spent=Number(spentMap[cat])||0,pct=limit?Math.min(100,spent/limit*100):0;return `<div class="budget-line"><div class="tr-icon">${icon(catIcon(cat))}</div><div class="budget-line-content"><div class="budget-line-head"><strong>${h(cat)}</strong><small>${fmt(spent,state.currency)} / ${fmt(limit,state.currency)}</small></div><div class="progress"><span style="width:${pct}%;background:${spent>limit?'#e68074':COLORS[cat]||'#328c79'}"></span></div></div><button class="iconbtn" style="width:33px;height:33px;flex-shrink:0" title="Edit budget" onclick="showBudget('${h(cat)}')">${icon('edit',15)}</button></div>`;}).join('')}</div>`:empty('No budgets yet','Set your first category budget to manage spending.')}</div>`;}
-function settings(){let sources=Array.isArray(state.sources)?state.sources:[],permitted=native()?permissionStatus:false;return `${heading('YOUR SPACE, YOUR RULES','Settings & privacy','Control how Folio tracks, stores and displays your finances.')}${demoNotice()}${trackingPanel()}<div class="settings-stack"><section class="setting-section"><h2 class="setting-title">Automatic transaction capture</h2><p class="setting-description">Allow Folio to recognize supported financial notifications from the apps you choose. Raw notification messages are not stored.</p><div class="setting-row"><div><strong>Notification monitoring</strong><span>Only transactions from approved sources are processed on your device.</span></div><button aria-label="Toggle automatic capture" class="switch ${state.capture?'on':''}" role="switch" aria-checked="${state.capture}" onclick="toggleCapture()"></button></div><div class="setting-row"><div><strong>Android notification access</strong><span>${native()?'Grant Android system access before importing bank alerts.':'Notification access works in the installed Android app, not the browser preview.'}</span><div class="status-line ${permitted?'success':''}"><i class="dot"></i>${native()?(permitted?'Permission granted':'Permission not granted'):'Browser preview only'}</div></div><button class="secondary" ${!native()?'disabled':''} onclick="grantAccess()">${permitted?'Manage access':'Allow access'}</button></div><div class="setting-row" style="display:block"><strong style="margin-bottom:5px">Approved notification sources</strong><span style="max-width:none">Enter Android app package IDs, separated by commas. Examples for Google Messages and Samsung Messages are already added. You can include your bank’s app package ID.</span><textarea id="sourceInput" class="textinput" rows="2" style="margin-top:12px;resize:vertical">${h(sources.join(', '))}</textarea><div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" onclick="saveSources()">Save approved apps</button></div><p class="hint">For privacy, no other app’s notifications are parsed. Finances from notifications may need manual correction.</p></div></section><section class="setting-section"><h2 class="setting-title">Preferences</h2><p class="setting-description">Tailor the display to your financial life.</p><div class="setting-row"><div><strong>Reporting currency</strong><span>Only transactions in this currency enter totals; no automatic conversion is performed.</span></div><select aria-label="Reporting currency" onchange="setCurrency(this.value)">${['EGP','USD','SAR','AED','EUR','GBP'].map(c=>`<option ${state.currency===c?'selected':''}>${c}</option>`).join('')}</select></div></section><section class="setting-section"><h2 class="setting-title">Your data stays yours</h2><p class="setting-description">Stored locally on your device. No account, backend, third-party analytics or network permissions required.</p><div class="setting-row"><div><strong>Export transactions (CSV)</strong><span>A spreadsheet of transactions only. Balances, budgets and settings are not included. This is what older Folio builds can import.</span></div><button class="secondary" onclick="exportCsv()">${icon('download',15)} Export CSV</button></div><div class="setting-row"><div><strong>Full JSON backup</strong><span>Transactions, category budgets, reported balance, expected salary, monthly target, currency, allowlist and onboarding state.</span></div><button class="secondary" onclick="exportJson()">${icon('download',15)} Export JSON</button></div><div class="setting-row"><div><strong>Restore a backup</strong><span>Import CSV adds transactions and keeps everything else. Import JSON replaces this device's Folio data after saving a local snapshot.</span></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="chooseImportCsv()">Import CSV</button><button class="secondary" onclick="chooseImportJson()">Import JSON</button></div></div><div class="setting-row"><div><strong>${state.demo?'Start tracking real money':'Delete all financial records'}</strong><span>${state.demo?'Permanently dismiss sample transactions and start with an empty workspace.':'Clear transaction history and budgets on this device. Cannot be undone.'}</span></div><button class="secondary ${state.demo?'':'danger'}" onclick="${state.demo?'startLive()':'clearAll()'}">${state.demo?'Start now':'Delete data'}</button></div></section><section class="setting-section" style="background:#f0f8f2"><div style="display:flex;gap:14px;align-items:flex-start"><div class="metric-icon">${icon('shield',20)}</div><div><h2 class="setting-title">Designed to respect your privacy</h2><p class="setting-description" style="margin:0">Folio only processes allowlisted sources after you opt in. The recognition is rule-based and completely offline. Imported transactions can be edited or deleted at any time.</p></div></div></section></div>`;}
+function settings(){let sources=Array.isArray(state.sources)?state.sources:[],permitted=native()?permissionStatus:false;return `${heading('YOUR SPACE, YOUR RULES','Settings & privacy','Control how Folio tracks, stores and displays your finances.')}${demoNotice()}${trackingPanel()}<div class="settings-stack"><section class="setting-section"><h2 class="setting-title">Automatic transaction capture</h2><p class="setting-description">Allow Folio to recognize supported financial notifications from the apps you choose. Raw notification messages are not stored.</p><div class="setting-row"><div><strong>Notification monitoring</strong><span>Only transactions from approved sources are processed on your device.</span></div><button aria-label="Toggle automatic capture" class="switch ${state.capture?'on':''}" role="switch" aria-checked="${state.capture}" onclick="toggleCapture()"></button></div><div class="setting-row"><div><strong>Android notification access</strong><span>${native()?'Grant Android system access before importing bank alerts.':'Notification access works in the installed Android app, not the browser preview.'}</span><div class="status-line ${permitted?'success':''}"><i class="dot"></i>${native()?(permitted?'Permission granted':'Permission not granted'):'Browser preview only'}</div></div><button class="secondary" ${!native()?'disabled':''} onclick="grantAccess()">${permitted?'Manage access':'Allow access'}</button></div><div class="setting-row" style="display:block"><strong style="margin-bottom:5px">Approved notification sources</strong><span style="max-width:none">Enter Android app package IDs, separated by commas. Examples for Google Messages and Samsung Messages are already added. You can include your bank’s app package ID.</span><textarea id="sourceInput" class="textinput" rows="2" style="margin-top:12px;resize:vertical">${h(sources.join(', '))}</textarea><div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" onclick="saveSources()">Save approved apps</button></div><p class="hint">For privacy, no other app’s notifications are parsed. Finances from notifications may need manual correction.</p></div></section><section class="setting-section"><h2 class="setting-title">Preferences</h2><p class="setting-description">Tailor the display to your financial life.</p><div class="setting-row"><div><strong>Reporting currency</strong><span>Only transactions in this currency enter totals; no automatic conversion is performed.</span></div><select aria-label="Reporting currency" onchange="setCurrency(this.value)">${['EGP','USD','SAR','AED','EUR','GBP'].map(c=>`<option ${state.currency===c?'selected':''}>${c}</option>`).join('')}</select></div></section><section class="setting-section"><h2 class="setting-title">Experiments</h2><p class="setting-description">Payday runway is experimental and off until you turn it on. It is a read-only estimate from a fresh balance and confirmed commitments. When an input is missing or stale, Ask Folio says insufficient data and does not invent a number. Projected payday income and an unreceived gam'eya payout are not available now. Unconfirmed notification transactions are shown separately and are not part of the number. Dates use Cairo time.</p><div class="setting-row"><div><strong>Payday runway</strong><span>Available now until payday, after confirmed rent, installments, gam'eya pay-ins, family support, utilities, subscriptions, savings, and the emergency buffer.</span></div><button type="button" aria-label="Toggle payday runway" class="switch ${state.experimentalPaydayRunway?'on':''}" role="switch" aria-checked="${state.experimentalPaydayRunway?'true':'false'}" onclick="togglePaydayRunway()"></button></div><form onsubmit="savePaydayRunway(event)"><div class="setting-row"><div><strong>Next payday</strong><span>The Cairo date you expect to be paid. The amount below is a plan, not received money.</span></div><input id="payday-date" aria-label="Next payday" type="date" value="${h(state.paydayDate||'')}"></div><div class="setting-row"><div><strong>Expected payday amount</strong><span>Major units in ${h(state.currency)}. Leave empty if you do not know it yet. Type 0 only when the amount is zero.</span></div><input id="payday-amount" aria-label="Expected payday amount" inputmode="decimal" value="${h(moneyInput(state.paydayAmountMinor))}"></div><div class="setting-row"><div><strong>Savings reserved</strong><span>Money already set aside. Leave empty until you know the amount.</span></div><input id="payday-savings" aria-label="Savings reserved" inputmode="decimal" value="${h(moneyInput(state.savingsReservedMinor))}"></div><div class="setting-row"><div><strong>Emergency buffer</strong><span>Kept out of safe to spend. Leave empty until you know the amount.</span></div><input id="payday-buffer" aria-label="Emergency buffer" inputmode="decimal" value="${h(moneyInput(state.emergencyReserveMinor))}"></div>${noneBox('payday-no-commitments','No commitments before payday',state.commitments)}<div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" type="submit">Save payday runway</button></div></form></section><section class="setting-section"><h2 class="setting-title">Your data stays yours</h2><p class="setting-description">Stored locally on your device. No account, backend, third-party analytics or network permissions required.</p><div class="setting-row"><div><strong>Export transactions (CSV)</strong><span>A spreadsheet of transactions only. Balances, budgets and settings are not included. This is what older Folio builds can import.</span></div><button class="secondary" onclick="exportCsv()">${icon('download',15)} Export CSV</button></div><div class="setting-row"><div><strong>Full JSON backup</strong><span>Transactions, category budgets, reported balance, expected salary, monthly target, currency, allowlist and onboarding state.</span></div><button class="secondary" onclick="exportJson()">${icon('download',15)} Export JSON</button></div><div class="setting-row"><div><strong>Restore a backup</strong><span>Import CSV adds transactions and keeps everything else. Import JSON replaces this device's Folio data after saving a local snapshot.</span></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="chooseImportCsv()">Import CSV</button><button class="secondary" onclick="chooseImportJson()">Import JSON</button></div></div><div class="setting-row"><div><strong>${state.demo?'Start tracking real money':'Delete all financial records'}</strong><span>${state.demo?'Permanently dismiss sample transactions and start with an empty workspace.':'Clear transaction history and budgets on this device. Cannot be undone.'}</span></div><button class="secondary ${state.demo?'':'danger'}" onclick="${state.demo?'startLive()':'clearAll()'}">${state.demo?'Start now':'Delete data'}</button></div></section><section class="setting-section" style="background:#f0f8f2"><div style="display:flex;gap:14px;align-items:flex-start"><div class="metric-icon">${icon('shield',20)}</div><div><h2 class="setting-title">Designed to respect your privacy</h2><p class="setting-description" style="margin:0">Folio only processes allowlisted sources after you opt in. The recognition is rule-based and completely offline. Imported transactions can be edited or deleted at any time.</p></div></div></section></div>`;}
 function render(){if(window.FolioV2)return window.FolioV2.render();document.getElementById('root').innerHTML=shell(({overview,transactions,insights,budgets,settings})[page]());}
 function dateInputValue(time){let d=new Date(time);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function showTransaction(id=null){let t=state.transactions.find(x=>x.id===id);currentEdit=id;modalType=(t&&t.direction)||'expense';let today=dateInputValue(Date.now());
@@ -663,6 +722,12 @@ function removeBudget(cat){if(!confirm('Remove this budget?'))return;delete stat
 function startLive(){if(!confirm('Replace sample data with your private, empty financial workspace? Sample transactions will be removed.'))return;state=emptyState();if(native()){try{state.sources=JSON.parse(FolioNative.getSourcePackages());state.capture=FolioNative.captureEnabled();}catch(e){}}persist();render();notify('Your private workspace is ready');refreshNative();}
 function clearAll(){if(!confirm('Delete all recorded transactions and budgets on this device? This cannot be undone.'))return;state.transactions=[];state.budgets={};if(native())try{FolioNative.clearPending();}catch(e){}persist();render();notify('Financial records deleted');}
 function setCurrency(c){state.currency=c;persist();render();notify('Reporting currency: '+c+' (no conversion)');}
+function moneyInput(minor){if(minor==null||typeof minor!=='number'||!Number.isSafeInteger(minor))return '';const sign=minor<0?'-':'',abs=Math.abs(minor),frac=abs%100;return sign+Math.trunc(abs/100)+'.'+(frac<10?'0':'')+frac;}
+function noneBox(id,label,list){const items=Array.isArray(list)?list.length:-1;const note=items>0?items+' on file. Folio will not erase them.':'Check this only if you have confirmed there are none.';return `<label class="setting-row"><span><strong>${label}</strong><span>${note}</span></span><input id="${id}" type="checkbox" aria-label="${label}" ${items===0?'checked':''} ${items>0?'disabled':''}></label>`;}
+function togglePaydayRunway(){state.experimentalPaydayRunway=state.experimentalPaydayRunway!==true;persist();render();notify(state.experimentalPaydayRunway?'Payday runway is on. Missing inputs stay insufficient data.':'Payday runway is off.');}
+function readMajorField(id){const node=document.getElementById(id);const text=String(node&&node.value||'').trim();if(!text)return {empty:true,value:null,invalid:false};const minor=FolioData.majorToMinor(text);if(minor==null||minor<0)return {empty:false,value:null,invalid:true};return {empty:false,value:minor,invalid:false};}
+function confirmNone(id,key){const box=document.getElementById(id);const current=state[key];if(Array.isArray(current)&&current.length>0)return;state[key]=box&&box.checked?[]:null;}
+function savePaydayRunway(e){if(e&&e.preventDefault)e.preventDefault();const dateNode=document.getElementById('payday-date');const date=String(dateNode&&dateNode.value||'').trim();if(date&&!/^\d{4}-\d{2}-\d{2}$/.test(date)){notify('Enter a payday date as YYYY-MM-DD.');return;}const amount=readMajorField('payday-amount');const savings=readMajorField('payday-savings');const buffer=readMajorField('payday-buffer');if(amount.invalid||savings.invalid||buffer.invalid){notify('Enter amounts in major units, such as 15000.00, or leave the box empty.');return;}state.paydayDate=date||null;state.paydayAmountMinor=amount.empty?null:amount.value;state.paydayCurrency=amount.empty?null:state.currency;state.savingsReservedMinor=savings.empty?null:savings.value;state.emergencyReserveMinor=buffer.empty?null:buffer.value;confirmNone('payday-no-commitments','commitments');persist();render();notify('Payday runway saved. Empty inputs stay unanswered.');}
 function toggleCapture(){if(state.demo){notify('Start your private workspace before enabling capture.');return;}if(!state.capture&&!confirm('Folio will analyze new notifications from your approved apps locally to identify transactions. Other messages are discarded. Continue?'))return;state.capture=!state.capture;if(native())try{FolioNative.setCaptureEnabled(state.capture);}catch(e){}persist();render();notify(state.capture?'Capture enabled. Check notification access.':'Capture turned off');}
 function grantAccess(){if(!native()){notify('Install the Android app to grant notification access.');return;}FolioNative.openNotificationSettings();}
 function saveSources(){let area=document.getElementById('sourceInput');let list=[...new Set(area.value.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean))];if(list.some(s=>!(/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(s)))){notify('Use package IDs such as com.google.android.apps.messaging');return;}state.sources=list;if(native())try{FolioNative.setSourcePackages(JSON.stringify(list));}catch(e){}persist();render();notify('Approved sources updated');}
@@ -742,6 +807,744 @@ function refreshNative(){if(!native())return;try{const oldPermission=permissionS
 window.folioNativeRefresh=refreshNative;
 if(native())try{state.capture=FolioNative.captureEnabled();state.sources=JSON.parse(FolioNative.getSourcePackages());}catch(e){}
 render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
+</script><script>
+/* <folio-inline:payday-runway.js> */
+/* Payday Money Runway. Experimental, deterministic, no DOM and no network.
+   Integer minor units only. Cairo civil dates. Never converts currency.
+   Incomplete or stale inputs return status "insufficient data" and no amount. */
+(function (root) {
+  'use strict';
+
+  var STALE_AFTER_DAYS = 7;
+  var DAY_MS = 86400000;
+
+  function isInt(value) {
+    return typeof value === 'number' && Number.isSafeInteger(value);
+  }
+
+  function addCode(list, code) {
+    if (list.indexOf(code) < 0) list.push(code);
+  }
+
+  function sortCodes(list) {
+    var copy = list.slice();
+    copy.sort();
+    return copy;
+  }
+
+  function lastWeekday(year, monthIndex, weekday) {
+    var last = new Date(Date.UTC(year, monthIndex + 1, 0));
+    var delta = (last.getUTCDay() - weekday + 7) % 7;
+    return last.getUTCDate() - delta;
+  }
+
+  /* Africa/Cairo without Intl, so API 26 tzdata cannot move the date.
+     2011-2022: UTC+2 all year. From 2023: UTC+3 from the last Friday of April
+     at 00:00 UTC+2 until the last Thursday of October at 24:00 UTC+3. */
+  function cairoOffsetMinutes(utcMs) {
+    if (!isInt(utcMs)) return null;
+    var year = new Date(utcMs).getUTCFullYear();
+    if (year < 2011 || year > 2099) return null;
+    if (year < 2023) return 120;
+    var utcStart = Date.UTC(year, 3, lastWeekday(year, 3, 5), 0, 0, 0) - 2 * 60 * 60000;
+    var utcEnd = Date.UTC(year, 9, lastWeekday(year, 9, 4) + 1, 0, 0, 0) - 3 * 60 * 60000;
+    if (utcMs >= utcStart && utcMs < utcEnd) return 180;
+    return 120;
+  }
+
+  function cairoParts(utcMs) {
+    var offset = cairoOffsetMinutes(utcMs);
+    if (offset == null) return null;
+    var shifted = new Date(utcMs + offset * 60000);
+    var year = shifted.getUTCFullYear();
+    var month = shifted.getUTCMonth() + 1;
+    var day = shifted.getUTCDate();
+    return {
+      year: year,
+      month: month,
+      day: day,
+      hour: shifted.getUTCHours(),
+      minute: shifted.getUTCMinutes(),
+      offset: offset,
+      ymd: year * 10000 + month * 100 + day,
+      iso: year + '-' + pad2(month) + '-' + pad2(day)
+    };
+  }
+
+  function pad2(n) {
+    return (n < 10 ? '0' : '') + n;
+  }
+
+  function parseYmd(text) {
+    if (typeof text !== 'string') return null;
+    var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) return null;
+    var year = Number(match[1]);
+    var month = Number(match[2]);
+    var day = Number(match[3]);
+    if (month < 1 || month > 12) return null;
+    var utc = Date.UTC(year, month - 1, day);
+    var check = new Date(utc);
+    if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
+    return { year: year, month: month, day: day, ymd: year * 10000 + month * 100 + day, iso: text };
+  }
+
+  function civilIndex(parts) {
+    return Math.floor(Date.UTC(parts.year, parts.month - 1, parts.day) / DAY_MS);
+  }
+
+  function truncDiv(n, d) {
+    return Math.trunc(n / d);
+  }
+
+  function addInt(a, b) {
+    var sum = a + b;
+    return Number.isSafeInteger(sum) ? sum : null;
+  }
+
+  function normalizeCurrency(value) {
+    if (typeof value !== 'string') return null;
+    var text = value.replace(/^\s+|\s+$/g, '').toUpperCase();
+    if (!/^[A-Z]{3}$/.test(text)) return null;
+    return text;
+  }
+
+  function own(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+  }
+
+  function pickList(src, keys) {
+    var found = false;
+    var value = null;
+    var conflict = false;
+    var invalid = false;
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      if (!own(src, keys[i])) continue;
+      var raw = src[keys[i]];
+      if (raw == null) continue;
+      if (!Array.isArray(raw)) { invalid = true; continue; }
+      if (!found) { found = true; value = raw; }
+      else if (JSON.stringify(value) !== JSON.stringify(raw)) conflict = true;
+    }
+    return { present: found && !conflict && !invalid, value: found ? value : null, conflict: conflict, invalid: invalid };
+  }
+
+  function pickInt(src, keys) {
+    var found = false;
+    var value = null;
+    var conflict = false;
+    var invalid = false;
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      if (!own(src, keys[i])) continue;
+      var raw = src[keys[i]];
+      if (raw == null || raw === '') continue;
+      if (!isInt(raw)) { invalid = true; continue; }
+      if (!found) { found = true; value = raw; }
+      else if (value !== raw) conflict = true;
+    }
+    return { present: found && !conflict && !invalid, value: found && !conflict && !invalid ? value : null, conflict: conflict, invalid: invalid };
+  }
+
+  function firstString(obj, keys) {
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      if (own(obj, keys[i]) && obj[keys[i]] != null && obj[keys[i]] !== '') return obj[keys[i]];
+    }
+    return null;
+  }
+
+  function emptyResult(currency, missing, excluded, payday, extra) {
+    var side = extra || {};
+    return {
+      status: 'insufficient data',
+      currency: currency,
+      safe_to_spend_minor: null,
+      available_now_minor: null,
+      per_day_minor: null,
+      days: null,
+      calendar_days: null,
+      remainder_minor: null,
+      breakdown: [],
+      bills_due: [],
+      unconfirmed_transactions: side.unconfirmedTransactions || [],
+      unconfirmed_net_minor: null,
+      unconfirmed_commitments: side.unconfirmedCommitments || [],
+      missing: sortCodes(missing),
+      excluded: excluded,
+      payday: payday
+    };
+  }
+
+  var KINDS = { rent: 1, installment: 1, family: 1, utility: 1, subscription: 1, other: 1 };
+
+  function normalizeKind(value) {
+    if (typeof value !== 'string') return null;
+    var text = value.replace(/^\s+|\s+$/g, '').toLowerCase();
+    if (text === "gam'eya" || text === 'gameya' || text === 'gam3eya' || text === 'gam’eya') return "gam'eya";
+    if (KINDS[text]) return text;
+    return null;
+  }
+
+  function paidState(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    if (raw.paid === true) return true;
+    if (raw.paid === false) return false;
+    if (typeof raw.status === 'string') {
+      var status = raw.status.toLowerCase();
+      if (status === 'paid') return true;
+      if (status === 'unpaid') return false;
+    }
+    return null;
+  }
+
+  function userConfirmed(raw) {
+    if (raw.confirmed === true || raw.userConfirmed === true) return true;
+    if (raw.confirmed === false || raw.userConfirmed === false) return false;
+    return null;
+  }
+
+  function isInflow(raw) {
+    var flow = raw.flow || raw.event || raw.role;
+    if (typeof flow === 'string') {
+      var name = flow.toLowerCase();
+      if (name === 'payout' || name === 'pay-out' || name === 'inflow') return true;
+      if (name === 'pay-in' || name === 'contribution' || name === 'outflow') return false;
+    }
+    if (raw.payout === true) return true;
+    if (raw.direction === 'inflow' || raw.direction === 'income') return true;
+    return false;
+  }
+
+  function isEstimated(raw) {
+    if (raw.amountEstimated === true || raw.estimated === true) return true;
+    if (typeof raw.amountKind === 'string' && raw.amountKind.toLowerCase() === 'estimated') return true;
+    return false;
+  }
+
+  function txnReviewState(tx) {
+    var status = typeof tx.status === 'string' ? tx.status.toLowerCase() : '';
+    if (status === 'rejected') return 'rejected';
+    if (status === 'duplicate-candidate' || status === 'duplicate_candidate') return 'duplicate_candidate';
+    if (status === 'suggested' || status === 'unconfirmed') return 'unconfirmed';
+    if (status === 'confirmed') return 'confirmed';
+    if (tx.review === true || tx.confirmed === false) return 'unconfirmed';
+    if (tx.source === 'notification' && tx.review !== false && tx.confirmed !== true) return 'unconfirmed';
+    return 'confirmed';
+  }
+
+  function obligationId(raw) {
+    if (raw.id == null || raw.id === '') return null;
+    return String(raw.id);
+  }
+
+  function obligationAmount(raw) {
+    var hasMinor = own(raw, 'amountMinor') && raw.amountMinor != null;
+    var hasSnake = own(raw, 'amount_minor') && raw.amount_minor != null;
+    if (hasMinor && hasSnake && raw.amountMinor !== raw.amount_minor) return undefined;
+    if (hasMinor) return raw.amountMinor;
+    if (hasSnake) return raw.amount_minor;
+    return null;
+  }
+
+  function dueParts(raw, missing) {
+    var keys = ['due', 'dueDate', 'due_on', 'date', 'due_at', 'dueAt'];
+    var rawDue = null;
+    var foundDue = false;
+    var dueKey;
+    for (dueKey = 0; dueKey < keys.length; dueKey++) {
+      if (!own(raw, keys[dueKey]) || raw[keys[dueKey]] == null || raw[keys[dueKey]] === '') continue;
+      if (!foundDue) { foundDue = true; rawDue = raw[keys[dueKey]]; }
+      else if (String(rawDue) !== String(raw[keys[dueKey]])) {
+        addCode(missing, 'invalid_obligation');
+        return null;
+      }
+    }
+    if (typeof rawDue === 'string') {
+      var parsed = parseYmd(rawDue);
+      if (!parsed) { addCode(missing, 'invalid_obligation'); return null; }
+      return parsed;
+    }
+    if (isInt(rawDue)) {
+      var parts = cairoParts(rawDue);
+      if (!parts) { addCode(missing, 'unsupported_clock'); return null; }
+      return parts;
+    }
+    addCode(missing, 'invalid_obligation');
+    return null;
+  }
+
+  function isPaid(raw) {
+    if (raw.paid === true) return true;
+    if (typeof raw.status === 'string' && raw.status.toLowerCase() === 'paid') return true;
+    return false;
+  }
+
+  function linkedToCounted(raw, counted) {
+    var ids = raw.linkedPaymentIds || raw.linked_payment_ids;
+    if (!Array.isArray(ids)) return false;
+    var i;
+    for (i = 0; i < ids.length; i++) {
+      if (ids[i] != null && counted[String(ids[i])]) return true;
+    }
+    return false;
+  }
+
+  function feeToAdd(raw) {
+    var fee = own(raw, 'feeMinor') ? raw.feeMinor : raw.fee_minor;
+    if (fee == null || fee === '') return 0;
+    if (!isInt(fee) || fee < 0) return null;
+    if (raw.feePaid === true || raw.fee_paid === true) return 0;
+    return fee;
+  }
+
+  function considerOne(raw, kind, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments) {
+    var id = obligationId(raw);
+    if (id != null) {
+      if (seenIds[id]) addCode(missing, 'duplicate_obligation');
+      seenIds[id] = 1;
+    }
+    var amount = obligationAmount(raw);
+    var rowCurrency = normalizeCurrency(raw.currency);
+    var due = dueParts(raw, missing);
+    if (!due) return;
+    if (!isInt(amount) || amount < 0 || !rowCurrency) {
+      addCode(missing, 'invalid_commitment');
+      return;
+    }
+    var pot = own(raw, 'potMinor') ? raw.potMinor : raw.pot_minor;
+    if (pot != null && pot !== '' && !isInt(pot)) {
+      addCode(missing, 'invalid_commitment');
+      return;
+    }
+    var label = firstString(raw, ['title', 'label', 'name', 'merchant']);
+    if (typeof label !== 'string' || !label) label = kind;
+    var item = {
+      id: id,
+      kind: kind,
+      label: label,
+      amount_minor: amount,
+      currency: rowCurrency,
+      due: due.iso,
+      included: false
+    };
+    if (kind === "gam'eya" && isInflow(raw)) {
+      item.reason = raw.received === true ? 'payout_not_added' : 'unreceived_payout';
+      item.pot_minor = isInt(pot) ? pot : null;
+      item.included = false;
+      excluded.push(item);
+      var payoutNext = addInt(sums.payout, amount);
+      if (payoutNext == null) addCode(missing, 'invalid_amount');
+      else sums.payout = payoutNext;
+      return;
+    }
+    if (paidState(raw) === true) {
+      item.reason = 'paid';
+      excluded.push(item);
+      return;
+    }
+    if (paydayYmd != null && due.ymd > paydayYmd) {
+      item.reason = 'due_after_payday';
+      excluded.push(item);
+      return;
+    }
+    if (paydayYmd != null && due.ymd === paydayYmd) {
+      item.reason = 'due_on_payday';
+      excluded.push(item);
+      return;
+    }
+    if (rowCurrency !== currency) {
+      item.reason = 'foreign_obligation';
+      excluded.push(item);
+      addCode(missing, 'foreign_obligation');
+      return;
+    }
+    if (userConfirmed(raw) !== true) {
+      item.reason = 'unconfirmed_commitment';
+      unconfirmedCommitments.push(item);
+      excluded.push(item);
+      addCode(missing, 'unconfirmed_commitment');
+      return;
+    }
+    if (isEstimated(raw)) {
+      item.reason = 'estimated_obligation';
+      excluded.push(item);
+      addCode(missing, 'estimated_obligation');
+      return;
+    }
+    if (linkedToCounted(raw, counted)) {
+      item.reason = 'already_in_ledger';
+      excluded.push(item);
+      return;
+    }
+    if (paidState(raw) !== false) {
+      addCode(missing, 'invalid_commitment');
+      return;
+    }
+    var fee = feeToAdd(raw);
+    if (fee == null) {
+      addCode(missing, 'invalid_commitment');
+      return;
+    }
+    var charge = addInt(amount, fee);
+    if (charge == null) {
+      addCode(missing, 'invalid_amount');
+      return;
+    }
+    item.amount_minor = charge;
+    item.fee_minor = fee;
+    item.included = true;
+    billsDue.push(item);
+    var next = addInt(sums[kind], charge);
+    if (next == null) addCode(missing, 'invalid_amount');
+    else sums[kind] = next;
+  }
+
+  function considerCommitment(raw, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments) {
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+      addCode(missing, 'invalid_commitment');
+      return;
+    }
+    var kind = normalizeKind(raw.kind);
+    if (!kind) {
+      addCode(missing, 'invalid_commitment');
+      return;
+    }
+    if (Array.isArray(raw.schedule) && raw.schedule.length) {
+      var parentId = obligationId(raw);
+      if (parentId != null) {
+        if (seenIds[parentId]) addCode(missing, 'duplicate_obligation');
+        seenIds[parentId] = 1;
+      }
+      var s;
+      for (s = 0; s < raw.schedule.length; s++) {
+        var row = raw.schedule[s];
+        if (row == null || typeof row !== 'object' || Array.isArray(row)) {
+          addCode(missing, 'invalid_commitment');
+          continue;
+        }
+        var childId = row.id != null && row.id !== '' ? row.id : (parentId ? parentId + '#' + (s + 1) : null);
+        considerOne({
+          id: childId,
+          title: row.title || row.label || raw.title || raw.label,
+          kind: kind,
+          currency: row.currency || raw.currency,
+          amountMinor: own(row, 'amountMinor') || own(row, 'amount_minor') ? (own(row, 'amountMinor') ? row.amountMinor : row.amount_minor) : null,
+          due: row.due || row.dueDate || row.date,
+          due_at: own(row, 'due_at') ? row.due_at : raw.due_at,
+          dueAt: own(row, 'dueAt') ? row.dueAt : raw.dueAt,
+          paid: own(row, 'paid') ? row.paid : raw.paid,
+          status: row.status || raw.status,
+          confirmed: own(row, 'confirmed') ? row.confirmed : raw.confirmed,
+          userConfirmed: raw.userConfirmed,
+          flow: row.flow || row.event || raw.flow || raw.event || raw.role,
+          payout: row.payout === true || raw.payout === true,
+          direction: row.direction || raw.direction,
+          received: own(row, 'received') ? row.received : raw.received,
+          potMinor: own(row, 'potMinor') ? row.potMinor : raw.potMinor,
+          feeMinor: own(row, 'feeMinor') ? row.feeMinor : raw.feeMinor,
+          feePaid: own(row, 'feePaid') ? row.feePaid : raw.feePaid,
+          amountEstimated: row.amountEstimated === true || raw.amountEstimated === true || row.estimated === true || raw.estimated === true,
+          amountKind: row.amountKind || raw.amountKind,
+          linkedPaymentIds: row.linkedPaymentIds || raw.linkedPaymentIds,
+          linked_payment_ids: row.linked_payment_ids || raw.linked_payment_ids
+        }, kind, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
+      }
+      return;
+    }
+    considerOne(raw, kind, currency, paydayYmd, seenIds, counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
+  }
+
+  function txnTime(tx) {
+    var hasAt = own(tx, 'occurredAt') && tx.occurredAt != null;
+    var hasSnake = own(tx, 'occurred_at') && tx.occurred_at != null;
+    if (hasAt && hasSnake && tx.occurredAt !== tx.occurred_at) return undefined;
+    if (hasAt) return tx.occurredAt;
+    if (hasSnake) return tx.occurred_at;
+    return null;
+  }
+
+  function txnAmount(tx) {
+    var hasMinor = own(tx, 'amountMinor') && tx.amountMinor != null;
+    var hasSnake = own(tx, 'amount_minor') && tx.amount_minor != null;
+    if (hasMinor && hasSnake && tx.amountMinor !== tx.amount_minor) return undefined;
+    if (hasMinor) return tx.amountMinor;
+    if (hasSnake) return tx.amount_minor;
+    return null;
+  }
+
+  function isTransfer(tx) {
+    if (tx.transfer === true) return true;
+    if (tx.direction === 'transfer') return true;
+    if (typeof tx.category === 'string' && tx.category.toLowerCase() === 'transfers') return true;
+    return false;
+  }
+
+  function considerTransaction(tx, currency, snapshotAt, seenIds, missing, excluded, sums) {
+    if (tx == null || typeof tx !== 'object' || Array.isArray(tx)) {
+      addCode(missing, 'invalid_transaction');
+      return;
+    }
+    var id = tx.id == null || tx.id === '' ? null : String(tx.id);
+    if (id != null) {
+      if (seenIds[id]) addCode(missing, 'duplicate_transaction');
+      seenIds[id] = 1;
+    }
+    var at = txnTime(tx);
+    if (!isInt(at)) {
+      addCode(missing, 'invalid_transaction');
+      return;
+    }
+    if (at < snapshotAt) {
+      sums.before += 1;
+      return;
+    }
+    if (at === snapshotAt) {
+      sums.at += 1;
+      return;
+    }
+    var amount = txnAmount(tx);
+    var rowCurrency = normalizeCurrency(tx.currency);
+    var review = txnReviewState(tx);
+    if (review !== 'confirmed') {
+      if (!isInt(amount) || amount < 0 || !rowCurrency) {
+        addCode(missing, 'invalid_transaction');
+        return;
+      }
+      if (!isTransfer(tx) && tx.direction !== 'income' && tx.direction !== 'expense') {
+        addCode(missing, 'invalid_transaction');
+        return;
+      }
+      if (review === 'unconfirmed' && !isTransfer(tx) && rowCurrency === currency) {
+        var pendingSigned = tx.direction === 'income' ? amount : -amount;
+        var pendingNext = addInt(sums.unconfirmedNet, pendingSigned);
+        if (pendingNext == null) addCode(missing, 'invalid_amount');
+        else sums.unconfirmedNet = pendingNext;
+      }
+      var pending = {
+        reason: review,
+        id: id,
+        amount_minor: amount,
+        currency: rowCurrency,
+        direction: tx.direction || null,
+        occurred_at: at,
+        source: tx.source || null
+      };
+      sums.unconfirmed.push(pending);
+      excluded.push(pending);
+      return;
+    }
+    if (isTransfer(tx)) {
+      excluded.push({ reason: 'transfer', id: id, occurred_at: at });
+      return;
+    }
+    if (!isInt(amount) || amount < 0) {
+      addCode(missing, 'invalid_transaction');
+      return;
+    }
+    if (!rowCurrency) {
+      addCode(missing, 'invalid_transaction');
+      return;
+    }
+    if (rowCurrency !== currency) {
+      excluded.push({ reason: 'other_currency', id: id, amount_minor: amount, currency: rowCurrency, occurred_at: at });
+      return;
+    }
+    if (tx.direction !== 'income' && tx.direction !== 'expense') {
+      addCode(missing, 'invalid_transaction');
+      return;
+    }
+    var signed = tx.direction === 'income' ? amount : -amount;
+    var next = addInt(sums.net, signed);
+    if (next == null) addCode(missing, 'invalid_amount');
+    else {
+      sums.net = next;
+      if (id) sums.counted[id] = 1;
+    }
+  }
+
+  function evaluate(input) {
+    var src = input && typeof input === 'object' ? input : {};
+    var missing = [];
+    var excluded = [];
+    var currency = normalizeCurrency(src.currency);
+    if (!currency) addCode(missing, 'currency');
+
+    var now = pickInt(src, ['now']);
+    if (now.invalid || now.conflict) addCode(missing, 'now');
+    else if (!now.present) addCode(missing, 'now');
+    else if (cairoOffsetMinutes(now.value) == null) addCode(missing, 'unsupported_clock');
+
+    var balance = pickInt(src, ['reportedBalanceMinor', 'self_reported_balance_minor']);
+    if (balance.invalid || balance.conflict) addCode(missing, 'reported_balance');
+    else if (!balance.present) addCode(missing, 'reported_balance');
+
+    var reportedAt = pickInt(src, ['balanceReportedAt', 'self_reported_at']);
+    if (reportedAt.invalid || reportedAt.conflict) addCode(missing, 'balance_reported_at');
+    else if (!reportedAt.present) addCode(missing, 'balance_reported_at');
+    else if (cairoOffsetMinutes(reportedAt.value) == null && now.present) addCode(missing, 'unsupported_clock');
+
+    var txList = pickList(src, ['transactions']);
+    if (txList.invalid || txList.conflict || !txList.present) addCode(missing, 'transactions');
+
+    var payday = null;
+    var paydayText = null;
+    if (!own(src, 'paydayDate') && !own(src, 'payday_date')) addCode(missing, 'payday_date');
+    else {
+      paydayText = own(src, 'paydayDate') && src.paydayDate != null && src.paydayDate !== '' ? src.paydayDate : src.payday_date;
+      if (paydayText == null || paydayText === '') addCode(missing, 'payday_date');
+      else {
+        payday = parseYmd(paydayText);
+        if (!payday) addCode(missing, 'payday_date');
+      }
+    }
+
+    var paydayAmount = pickInt(src, ['paydayAmountMinor', 'payday_amount_minor']);
+    if (paydayAmount.invalid || paydayAmount.conflict || !paydayAmount.present || paydayAmount.value < 0) addCode(missing, 'payday_amount');
+
+    var paydayCurrency = null;
+    var paydayCurrencyRaw = own(src, 'paydayCurrency') ? src.paydayCurrency : (own(src, 'payday_currency') ? src.payday_currency : null);
+    if (!own(src, 'paydayCurrency') && !own(src, 'payday_currency')) addCode(missing, 'payday_currency');
+    else if (paydayCurrencyRaw == null || paydayCurrencyRaw === '') addCode(missing, 'payday_currency');
+    else {
+      paydayCurrency = normalizeCurrency(paydayCurrencyRaw);
+      if (!paydayCurrency) addCode(missing, 'payday_currency');
+      else if (currency && paydayCurrency !== currency) addCode(missing, 'payday_currency_mismatch');
+    }
+
+    var staleField = pickInt(src, ['staleAfterDays', 'stale_after_days']);
+    var staleDays = STALE_AFTER_DAYS;
+    if (own(src, 'staleAfterDays') || own(src, 'stale_after_days')) {
+      if (staleField.invalid || staleField.conflict || !staleField.present || staleField.value < 1 || staleField.value > 3660) {
+        addCode(missing, 'stale_after_days');
+      } else staleDays = staleField.value;
+    }
+
+    var savings = pickInt(src, ['savingsReservedMinor', 'savings_reserved_minor']);
+    if (savings.invalid || savings.conflict || !savings.present || savings.value < 0) addCode(missing, 'savings_reserved');
+
+    var emergency = pickInt(src, ['emergencyBufferMinor', 'emergencyReserveMinor', 'emergency_buffer_minor', 'emergency_reserve_minor']);
+    if (emergency.invalid || emergency.conflict || !emergency.present || emergency.value < 0) addCode(missing, 'emergency_buffer');
+
+    var commitmentPick = pickList(src, ['commitments']);
+    if (commitmentPick.invalid || commitmentPick.conflict || !commitmentPick.present) addCode(missing, 'commitments');
+
+    var today = now.present && cairoOffsetMinutes(now.value) != null ? cairoParts(now.value) : null;
+    if (today && payday && today.ymd > payday.ymd) addCode(missing, 'payday_passed');
+    if (now.present && reportedAt.present && reportedAt.value > now.value) addCode(missing, 'future_snapshot');
+    if (now.present && reportedAt.present && reportedAt.value <= now.value && now.value - reportedAt.value > staleDays * DAY_MS) {
+      addCode(missing, 'stale_snapshot');
+    }
+
+    var paydayInfo = null;
+    if (payday || paydayAmount.present || paydayCurrency) {
+      paydayInfo = {
+        date: payday ? payday.iso : null,
+        amount_minor: paydayAmount.present ? paydayAmount.value : null,
+        currency: paydayCurrency,
+        included: false,
+        is_today: !!(today && payday && today.ymd === payday.ymd)
+      };
+    }
+
+    var seenObligations = {};
+    var seenTx = {};
+    var billsDue = [];
+    var unconfirmedCommitments = [];
+    var sums = { rent: 0, installment: 0, "gam'eya": 0, family: 0, utility: 0, subscription: 0, other: 0, payout: 0 };
+    var txSums = { net: 0, before: 0, at: 0, unconfirmedNet: 0, unconfirmed: [], counted: {} };
+    var paydayYmd = payday ? payday.ymd : null;
+    var side = { unconfirmedTransactions: txSums.unconfirmed, unconfirmedCommitments: unconfirmedCommitments };
+    var i;
+    if (currency && reportedAt.present && txList.present) {
+      for (i = 0; i < txList.value.length; i++) considerTransaction(txList.value[i], currency, reportedAt.value, seenTx, missing, excluded, txSums);
+    }
+    if (currency && commitmentPick.present) {
+      for (i = 0; i < commitmentPick.value.length; i++) considerCommitment(commitmentPick.value[i], currency, paydayYmd, seenObligations, txSums.counted, missing, excluded, billsDue, sums, unconfirmedCommitments);
+    }
+    if (txSums.before) excluded.push({ reason: 'before_snapshot', count: txSums.before });
+    if (txSums.at) excluded.push({ reason: 'at_snapshot', count: txSums.at });
+
+    if (missing.length) return emptyResult(currency, missing, excluded, paydayInfo, side);
+
+    var safe = balance.value;
+    safe = addInt(safe, txSums.net);
+    safe = safe == null ? null : addInt(safe, -sums.rent);
+    safe = safe == null ? null : addInt(safe, -sums.installment);
+    safe = safe == null ? null : addInt(safe, -sums["gam'eya"]);
+    safe = safe == null ? null : addInt(safe, -sums.family);
+    safe = safe == null ? null : addInt(safe, -sums.utility);
+    safe = safe == null ? null : addInt(safe, -sums.subscription);
+    safe = safe == null ? null : addInt(safe, -sums.other);
+    safe = safe == null ? null : addInt(safe, -savings.value);
+    safe = safe == null ? null : addInt(safe, -emergency.value);
+    if (safe == null) {
+      addCode(missing, 'invalid_amount');
+      return emptyResult(currency, missing, excluded, paydayInfo, side);
+    }
+
+    var calendarDays = civilIndex(payday) - civilIndex(today);
+    var days = calendarDays === 0 ? 1 : calendarDays;
+    var perDay = truncDiv(safe, days);
+    var remainder = safe - perDay * days;
+    billsDue.sort(function (a, b) {
+      if (a.due < b.due) return -1;
+      if (a.due > b.due) return 1;
+      if (a.kind < b.kind) return -1;
+      if (a.kind > b.kind) return 1;
+      var aid = a.id || '';
+      var bid = b.id || '';
+      if (aid < bid) return -1;
+      if (aid > bid) return 1;
+      return 0;
+    });
+
+    return {
+      status: safe < 0 ? 'shortfall' : 'ok',
+      currency: currency,
+      safe_to_spend_minor: safe,
+      available_now_minor: safe,
+      per_day_minor: perDay,
+      days: days,
+      calendar_days: calendarDays,
+      remainder_minor: remainder,
+      breakdown: [
+        { id: 'snapshot', label: 'Reported balance', amount_minor: balance.value, included: true },
+        { id: 'transactions', label: 'Confirmed transactions after the snapshot', amount_minor: txSums.net, included: true },
+        { id: 'rent', label: 'Rent due before payday', amount_minor: -sums.rent, included: true },
+        { id: 'installment', label: 'Installments due before payday', amount_minor: -sums.installment, included: true },
+        { id: 'gameya', label: "Gam'eya pay-ins due before payday", amount_minor: -sums["gam'eya"], included: true },
+        { id: 'family', label: 'Family support due before payday', amount_minor: -sums.family, included: true },
+        { id: 'utility', label: 'Utilities due before payday', amount_minor: -sums.utility, included: true },
+        { id: 'subscription', label: 'Subscriptions due before payday', amount_minor: -sums.subscription, included: true },
+        { id: 'other', label: 'Other commitments due before payday', amount_minor: -sums.other, included: true },
+        { id: 'savings', label: 'Savings reservation', amount_minor: -savings.value, included: true },
+        { id: 'emergency_buffer', label: 'Emergency buffer', amount_minor: -emergency.value, included: true },
+        { id: 'planned_payday', label: 'Planned payday income', amount_minor: paydayAmount.value, included: false },
+        { id: 'gam_eya_payouts', label: "Gam'eya payouts", amount_minor: sums.payout, included: false },
+        { id: 'unconfirmed_notifications', label: 'Unconfirmed notification transactions', amount_minor: txSums.unconfirmedNet, included: false }
+      ],
+      bills_due: billsDue,
+      unconfirmed_transactions: txSums.unconfirmed,
+      unconfirmed_net_minor: txSums.unconfirmedNet,
+      unconfirmed_commitments: unconfirmedCommitments,
+      missing: [],
+      excluded: excluded,
+      payday: paydayInfo
+    };
+  }
+
+  var api = {
+    STALE_AFTER_DAYS: STALE_AFTER_DAYS,
+    evaluate: evaluate,
+    cairoOffsetMinutes: cairoOffsetMinutes,
+    cairoParts: cairoParts
+  };
+  root.FolioPaydayRunway = api;
+  if (typeof module === 'object' && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+/* </folio-inline:payday-runway.js> */
 </script><script>
 /* <folio-inline:assistant.js> */
 /**
@@ -1739,7 +2542,201 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
     return uniqSort(assumed);
   }
 
+  function runwayEnabled(state) {
+    return asState(state).experimentalPaydayRunway === true;
+  }
+
+  function runwayEngine() {
+    var host = typeof globalThis !== 'undefined' ? globalThis : null;
+    if (host && host.FolioPaydayRunway && typeof host.FolioPaydayRunway.evaluate === 'function') return host.FolioPaydayRunway;
+    return null;
+  }
+
+  function readPresent(obj, keys, kind) {
+    var found = false;
+    var value = null;
+    var conflict = false;
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      if (!Object.prototype.hasOwnProperty.call(obj, keys[i])) continue;
+      var raw = obj[keys[i]];
+      if (raw == null || raw === '') continue;
+      var ok = kind === 'array' ? Array.isArray(raw) : typeof raw === 'string';
+      if (!ok) { conflict = true; continue; }
+      if (!found) { found = true; value = raw; }
+      else if (kind === 'array' ? JSON.stringify(value) !== JSON.stringify(raw) : value !== raw) conflict = true;
+    }
+    return { present: found && !conflict, value: found && !conflict ? value : null, conflict: conflict };
+  }
+
+  function buildRunwayInput(src) {
+    var extraMissing = [];
+    var extraExcluded = [];
+    var verifiedAmount = readInt(src, ['verifiedBalanceMinor', 'verified_balance_minor']);
+    var verifiedAt = readInt(src, ['verifiedBalanceAt', 'verified_balance_at']);
+    var reportedAmount = readInt(src, ['reportedBalanceMinor', 'self_reported_balance_minor']);
+    var reportedAt = readInt(src, ['balanceReportedAt', 'self_reported_at']);
+    if (verifiedAmount.conflict || verifiedAt.conflict || reportedAmount.conflict || reportedAt.conflict) extraMissing.push('conflicting_fields');
+    var amount = null;
+    var at = null;
+    var track = null;
+    if (verifiedAmount.present && verifiedAt.present) {
+      amount = verifiedAmount.value;
+      at = verifiedAt.value;
+      track = 'verified';
+      if (reportedAmount.present) extraExcluded.push({ reason: 'self_reported_not_added' });
+    } else if (verifiedAmount.present) {
+      amount = verifiedAmount.value;
+      track = 'verified';
+    } else {
+      if (reportedAmount.present) amount = reportedAmount.value;
+      if (reportedAt.present) at = reportedAt.value;
+      if (reportedAmount.present || reportedAt.present) track = 'self_reported';
+    }
+    var paydayDate = readPresent(src, ['paydayDate', 'payday_date'], 'string');
+    var paydayCurrency = readPresent(src, ['paydayCurrency', 'payday_currency'], 'string');
+    var commitments = readPresent(src, ['commitments'], 'array');
+    if (paydayDate.conflict || paydayCurrency.conflict || commitments.conflict) extraMissing.push('conflicting_fields');
+    var paydayAmount = readInt(src, ['paydayAmountMinor', 'payday_amount_minor']);
+    var savings = readInt(src, ['savingsReservedMinor', 'savings_reserved_minor']);
+    var emergency = readInt(src, ['emergencyBufferMinor', 'emergencyReserveMinor', 'emergency_buffer_minor', 'emergency_reserve_minor']);
+    var stale = readInt(src, ['staleAfterDays', 'stale_after_days']);
+    if (paydayAmount.conflict || savings.conflict || emergency.conflict || stale.conflict) extraMissing.push('conflicting_fields');
+    var input = {
+      now: Object.prototype.hasOwnProperty.call(src, 'now') ? src.now : null,
+      currency: typeof src.currency === 'string' ? src.currency : null,
+      reportedBalanceMinor: amount,
+      balanceReportedAt: at,
+      transactions: Array.isArray(src.transactions) ? src.transactions : null,
+      paydayDate: paydayDate.present ? paydayDate.value : null,
+      paydayAmountMinor: paydayAmount.present ? paydayAmount.value : null,
+      paydayCurrency: paydayCurrency.present ? paydayCurrency.value : null,
+      commitments: commitments.present ? commitments.value : null,
+      savingsReservedMinor: savings.present ? savings.value : null,
+      emergencyBufferMinor: emergency.present ? emergency.value : null
+    };
+    if (stale.present) input.staleAfterDays = stale.value;
+    else if (stale.conflict) extraMissing.push('stale_after_days');
+    return { input: input, extraMissing: uniqSort(extraMissing), extraExcluded: extraExcluded, track: track };
+  }
+
+  function runwayExplanation(result, cost) {
+    var known = result && (result.status === 'ok' || result.status === 'shortfall');
+    if (!known) {
+      var missing = result && result.missing && result.missing.length ? result.missing.join(', ') : 'unknown';
+      var blocked = 'Status: insufficient data. No safe-to-spend number was calculated. Missing or stale inputs: ' + missing + '.';
+      if (cost) blocked += ' The ' + formatMoney(cost.amount, cost.currency) + ' purchase was not judged.';
+      return blocked;
+    }
+    var total = formatMoney(result.safe_to_spend_minor, result.currency);
+    var perDay = formatMoney(result.per_day_minor, result.currency);
+    var text = 'Available now until payday is ' + total + ', which is ' + perDay + ' per day across ' + result.days + (result.days === 1 ? ' day.' : ' days.');
+    if (result.status === 'shortfall') text += ' The runway is short by ' + formatMoney(-result.safe_to_spend_minor, result.currency) + '.';
+    text += ' Projected payday income was not added to available now.';
+    if (result.unconfirmed_transactions && result.unconfirmed_transactions.length) {
+      text += ' Unconfirmed notification transactions are excluded from that number.';
+      if (typeof result.unconfirmed_net_minor === 'number') text += ' Shown separately, their net is ' + formatMoney(result.unconfirmed_net_minor, result.currency) + '.';
+    }
+    if (cost) {
+      var left = result.safe_to_spend_minor - cost.amount;
+      if (left >= 0) text += ' ' + formatMoney(cost.amount, cost.currency) + ' fits in that ' + total + ' and leaves ' + formatMoney(left, cost.currency) + '.';
+      else text += ' ' + formatMoney(cost.amount, cost.currency) + ' exceeds that ' + total + ' by ' + formatMoney(-left, cost.currency) + '.';
+    }
+    return text;
+  }
+
+  function withholdRunway(result, extraMissing, extraExcluded) {
+    var missing = uniqSort((result.missing || []).concat(extraMissing || []));
+    var excluded = (result.excluded || []).concat(extraExcluded || []);
+    if (extraMissing && extraMissing.length && result.status !== 'insufficient data') {
+      return {
+        status: 'insufficient data',
+        currency: result.currency,
+        safe_to_spend_minor: null,
+        available_now_minor: null,
+        per_day_minor: null,
+        days: null,
+        calendar_days: null,
+        remainder_minor: null,
+        breakdown: [],
+        bills_due: [],
+        missing: missing,
+        excluded: excluded,
+        payday: result.payday || null
+      };
+    }
+    return Object.assign({}, result, { missing: missing, excluded: excluded });
+  }
+
+  function runwaySafeToSpend(state) {
+    var engine = runwayEngine();
+    var src = asState(state);
+    if (!engine) {
+      return {
+        explanation: 'Status: insufficient data. No safe-to-spend number was calculated. Missing or stale inputs: payday_runway.',
+        assumed: ['payday_runway'],
+        currency: typeof src.currency === 'string' ? src.currency : null,
+        amount_minor: null,
+        balance_track: null,
+        details: { status: 'insufficient data', missing: ['payday_runway'], safe_to_spend_minor: null, per_day_minor: null, breakdown: [], bills_due: [] }
+      };
+    }
+    var built = buildRunwayInput(src);
+    var result = withholdRunway(engine.evaluate(built.input), built.extraMissing, built.extraExcluded);
+    return {
+      explanation: runwayExplanation(result, null),
+      assumed: result.missing.slice(),
+      currency: result.currency,
+      amount_minor: result.safe_to_spend_minor,
+      balance_track: built.track,
+      details: result
+    };
+  }
+
+  function runwayCanAfford(state, parsed) {
+    var safe = runwaySafeToSpend(state);
+    if (safe.amount_minor == null || !safe.details || safe.details.status === 'insufficient data') {
+      return {
+        explanation: runwayExplanation(safe.details, parsed),
+        assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
+        currency: parsed.currency,
+        amount_minor: null,
+        affordable: null,
+        balance_track: safe.balance_track,
+        details: Object.assign({ cost_minor: parsed.amount, cost_currency: parsed.currency }, safe.details || {})
+      };
+    }
+    if (parsed.currency !== safe.currency) {
+      return {
+        explanation: 'Cannot compare ' + formatMoney(parsed.amount, parsed.currency) + ' with ' + safe.currency + '. Currencies are never converted or mixed. Status: insufficient data.',
+        assumed: uniqSort(['currency_mismatch'].concat(parsed.assumed)),
+        currency: null,
+        amount_minor: null,
+        affordable: null,
+        balance_track: safe.balance_track,
+        details: { status: 'insufficient data', missing: ['currency_mismatch'], cost_minor: parsed.amount, cost_currency: parsed.currency, ledger_currency: safe.currency }
+      };
+    }
+    var left = safe.amount_minor - parsed.amount;
+    return {
+      explanation: runwayExplanation(safe.details, parsed),
+      assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
+      currency: parsed.currency,
+      amount_minor: left,
+      affordable: left >= 0,
+      balance_track: safe.balance_track,
+      details: Object.assign({ cost_minor: parsed.amount, remaining_minor: left }, safe.details)
+    };
+  }
+
   function safeToSpend(state, options) {
+    if (runwayEnabled(state)) {
+      var runway = runwaySafeToSpend(state);
+      if (options && options.category) {
+        runway = Object.assign({}, runway, { explanation: runway.explanation + ' A category limit was not applied.' });
+      }
+      return runway;
+    }
     var report = analyze(state);
     var category = options && options.category ? options.category : null;
     var safe = null;
@@ -1825,6 +2822,7 @@ render();persist();if(native()){setTimeout(refreshNative,450);setInterval(refres
         details: {}
       };
     }
+    if (runwayEnabled(state)) return runwayCanAfford(state, parsed);
     var safe = safeToSpend(state);
     if (parsed.currency !== safe.currency) {
       return {

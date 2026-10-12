@@ -99,7 +99,7 @@ function inlined(name){
   assert.ok(i>=0&&j>i,'missing inline '+name);
   return h.slice(i+start.length,j).trim();
 }
-for (const name of ['folio-data.js','assistant.js','folio-v2.js','folio-v2.css']) {
+for (const name of ['folio-data.js','assistant.js','payday-runway.js','folio-v2.js','folio-v2.css']) {
   assert.equal(inlined(name), fs.readFileSync('android/app/src/main/assets/'+name,'utf8').trim(), name+' bundled into the page');
 }
 assert.equal(fs.readFileSync('android/app/src/main/res/values/strings.xml','utf8').includes('>Folio<'), true);
@@ -137,5 +137,38 @@ assert.equal(savedBooks.budgets.EGP['Food & drinks'], 350000);
 assert.equal(savedBooks.reportedBalanceMinor, 842050);
 assert.equal(savedBooks.transactions.length, 4);
 assert.ok(savedBooks.transactions.some(row=>row&&row.occurredAt==='not-a-date'));
+
+const paydayBoot = boot();
+assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).schemaVersion, 1);
+assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).experimentalPaydayRunway, false);
+assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).paydayAmountMinor, null);
+paydayBoot.sandbox.window.scrollTo = () => {};
+vm.runInContext("nav('settings')", paydayBoot.sandbox);
+const settingsHtml = paydayBoot.doc.getElementById('root').innerHTML;
+assert.ok(settingsHtml.includes('aria-label="Toggle payday runway"'), 'settings offers the payday runway switch');
+assert.ok(settingsHtml.includes('aria-checked="false"'), 'payday runway starts off');
+assert.ok(settingsHtml.includes('insufficient data'), 'settings says missing inputs are not guessed');
+vm.runInContext('togglePaydayRunway()', paydayBoot.sandbox);
+assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).experimentalPaydayRunway, true);
+paydayBoot.doc.getElementById('payday-date').value = '2026-10-26';
+paydayBoot.doc.getElementById('payday-amount').value = '15000.50';
+paydayBoot.doc.getElementById('payday-savings').value = '0';
+paydayBoot.doc.getElementById('payday-buffer').value = '';
+paydayBoot.doc.getElementById('payday-no-commitments').checked = true;
+vm.runInContext('savePaydayRunway({preventDefault(){}})', paydayBoot.sandbox);
+const paydaySaved = JSON.parse(paydayBoot.data.get('folio_finance_v1'));
+assert.equal(paydaySaved.paydayDate, '2026-10-26');
+assert.equal(paydaySaved.paydayAmountMinor, 1500050);
+assert.equal(paydaySaved.paydayCurrency, 'EGP');
+assert.equal(paydaySaved.savingsReservedMinor, 0);
+assert.equal(paydaySaved.emergencyReserveMinor, null);
+assert.deepEqual(paydaySaved.commitments, []);
+assert.equal(paydaySaved.upcomingBills, null);
+assert.equal(paydaySaved.schemaVersion, 1);
+paydayBoot.doc.getElementById('payday-amount').value = '12.345';
+vm.runInContext('savePaydayRunway({preventDefault(){}})', paydayBoot.sandbox);
+assert.equal(JSON.parse(paydayBoot.data.get('folio_finance_v1')).paydayAmountMinor, 1500050, 'an invalid amount does not replace stored minor units');
+assert.equal(savedBooks.experimentalPaydayRunway, false);
+assert.equal(savedBooks.schemaVersion, 1);
 
 console.log('PASS bundled interface and tracking setup checks');

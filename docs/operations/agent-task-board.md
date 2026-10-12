@@ -8,7 +8,7 @@
 | FOL-103 | P0 | ChatGPT | Research Egyptian user need, price/coverage/trust and competitor gaps | Sourced findings, falsifiable hypotheses, research protocol | INITIAL DESK RESEARCH COMPLETE; user studies pending |
 | FOL-104 | P1 | Grok | Recruit 10 target users + three concept interviews | Genuine notes with consent, no fabricated interviews | BLOCKED: human participants required |
 | FOL-105 | P1 | ChatGPT | Design Payday Money Runway PRD + financial invariants + acceptance tests | Edge-case model with no unverified safe-spend claims | TODO |
-| FOL-106 | P1 | Cursor | Implement a feature-flagged pure cash-flow forecast module, independent unit tests | Demonstrably accurate on fixtures, merged only if P0 green | NOT STARTED |
+| FOL-106 | P1 | Cursor | Implement a feature-flagged pure cash-flow forecast module, independent unit tests | Demonstrably accurate on fixtures, merged only if P0 green | IN REVIEW on `cursor/payday-money-runway-ffb5`. Experimental, off by default. Obligations use the P2 commitment shape. Not merged: waiting on PR CI and the device upgrade job. P0.1 transaction statuses and P0.3 per-account balance freshness are the next tasks and are not in this change. |
 | FOL-107 | P1 | Grok | Adversarial compare ChatGPT financial engine against Cursor implementation | Documented disagreements, fixes and evidence | DEPENDS FOL-105/106 |
 | FOL-108 | P1 | Cursor | Measure launch latency, JavaScript event/render bottlenecks and test Android 8/14/15 upgrade | Baseline vs after with reproducible runs | TODO |
 | FOL-109 | P1 | ChatGPT | Egyptian Arabic assistant copy + failure/uncertainty microcopy | Reviewed messages, RTL UI and deterministic tests | TODO |

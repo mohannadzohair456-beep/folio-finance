@@ -33,7 +33,17 @@
       balanceReportedAt: null,
       v2Onboarded: false,
       legacyUnparsedBudgets: [],
-      legacyQueue: []
+      legacyQueue: [],
+      experimentalPaydayRunway: false,
+      paydayDate: null,
+      paydayAmountMinor: null,
+      paydayCurrency: null,
+      upcomingBills: null,
+      installments: null,
+      gameya: null,
+      commitments: null,
+      savingsReservedMinor: null,
+      emergencyReserveMinor: null
     };
   }
 
@@ -270,7 +280,56 @@
       return coerceTransaction(entry, index);
     }).filter(Boolean);
     state.legacyQueue = Array.isArray(input.legacyQueue) ? clone(input.legacyQueue) : [];
+    assignRunway(state, input);
     return { state: state, snapshot: snapshot, migrated: needsMigration };
+  }
+
+  function strictMinor(value) {
+    if (value == null || value === '') return { value: null, invalid: false };
+    if (typeof value === 'number' && Number.isSafeInteger(value)) return { value: value, invalid: false };
+    return { value: null, invalid: true };
+  }
+
+  function assignList(state, input, key, legacyKey) {
+    if (input[key] == null) {
+      state[key] = null;
+      return;
+    }
+    if (Array.isArray(input[key])) {
+      state[key] = clone(input[key]);
+      return;
+    }
+    state[key] = null;
+    state[legacyKey] = clone(input[key]);
+  }
+
+  function assignNonNegative(state, input, key, legacyKey) {
+    const parsed = strictMinor(input[key]);
+    if (parsed.invalid || (parsed.value != null && parsed.value < 0)) {
+      state[key] = null;
+      if (input[key] != null && input[key] !== '') state[legacyKey] = clone(input[key]);
+      return;
+    }
+    state[key] = parsed.value;
+  }
+
+  /* New optional fields. Schema stays 1. Null means the user has not answered;
+     an empty list means they confirmed there is nothing. */
+  function assignRunway(state, input) {
+    state.experimentalPaydayRunway = input.experimentalPaydayRunway === true;
+    state.paydayDate = typeof input.paydayDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.paydayDate) ? input.paydayDate : null;
+    if (input.paydayDate != null && input.paydayDate !== '' && state.paydayDate == null) state.legacyPaydayDate = clone(input.paydayDate);
+    const paydayAmount = strictMinor(input.paydayAmountMinor);
+    state.paydayAmountMinor = paydayAmount.invalid || paydayAmount.value == null || paydayAmount.value < 0 ? null : paydayAmount.value;
+    if (input.paydayAmountMinor != null && input.paydayAmountMinor !== '' && state.paydayAmountMinor == null) state.legacyPaydayAmount = clone(input.paydayAmountMinor);
+    state.paydayCurrency = canonicalCurrency(input.paydayCurrency);
+    if (input.paydayCurrency != null && input.paydayCurrency !== '' && state.paydayCurrency == null) state.legacyPaydayCurrency = clone(input.paydayCurrency);
+    assignList(state, input, 'upcomingBills', 'legacyUpcomingBills');
+    assignList(state, input, 'installments', 'legacyInstallments');
+    assignList(state, input, 'gameya', 'legacyGameya');
+    assignList(state, input, 'commitments', 'legacyCommitments');
+    assignNonNegative(state, input, 'savingsReservedMinor', 'legacySavingsReserved');
+    assignNonNegative(state, input, 'emergencyReserveMinor', 'legacyEmergencyReserve');
   }
 
   function summarize(records, primaryCurrency) {

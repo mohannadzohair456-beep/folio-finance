@@ -26,7 +26,17 @@ Investigation was against `main` at `f422d13404d71f5d50e1c9cdcd0fae1ac512a817`. 
 
 Downloaded the public release asset and read the zip. It is v2-only: no v1 JAR signature and no v3 block. `resources.arsc` is stored and 4-byte aligned. That v2-only shape is a known reason some phones report "problem parsing the package" while an emulator installs the same file. Signature conflicts are separate and happen when the certificate does not match the installed `com.folio.finance.app`.
 
+## Update — 12 Oct 2026, hypothesis validation and the experimental payday runway
+
+Research file `docs/research/hypothesis-validation-2026-10-12.md` is on main at `76a9f6d`. It ranks H2 (zero-effort visibility) first, H3 (commitments) second, and H1 (payday affordability) third, and it treats a payday number as safe only when the inputs are confirmed. No interviews were run for this note.
+
+The experimental Payday Money Runway is local and off until Settings turns it on. It reads commitments with kind rent, installment, gam'eya, family, utility, subscription, or other, and an explicit paid or unpaid flag. A gam'eya payout, including the whole pot, is not added to available now before receipt, and it is not added after receipt either: received cash has to be a confirmed ledger transaction. Projected payday income stays out of available now. Notification rows still waiting for review, and rows marked suggested, rejected, or duplicate-candidate, stay out of the authoritative total and are listed separately. Incomplete or stale inputs return the status `insufficient data` and no amount. Schema version stays 1. Transaction status migration (P0.1) and per-account balance freshness (P0.3) are not in this change.
+
+Local commands that passed on this branch before the pull request: `node tests/payday-runway.test.cjs` (71 checks), `node tests/money.test.cjs`, `node tests/assistant.test.cjs`, `node tests/ui.test.cjs`, and `node tests/v2.test.cjs`.
+
 ## Not done
+
+These three bullets described the tree at `f422d13`. The task board's 12 Oct 2026 baseline later records a signed v0.3.43 release. They are not the status of the payday runway change above.
 
 - No emulator install of v0.2.33, no data entry on a device, and no upgrade to this build. This environment has no Android SDK image and no release keystore. Details are in `docs/release/data-migration.md` and `docs/testing/test-results.md`.
 - The signed release APK is produced on the main CI workflow, which has the keystore secrets. Pull request CI compiled an unsigned release and passed the unit tests. `apksigner verify` for v1, v2, and v3 did not run on that pull request.

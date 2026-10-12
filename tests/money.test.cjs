@@ -46,9 +46,20 @@ assert.equal(migrated.state.transactions[2].incomplete, true);
 assert.equal(migrated.state.transactions[3].incomplete, true);
 assert.equal(migrated.snapshot.state.budgets.EGP.Shopping, '4000', 'snapshot keeps the pre-migration value');
 assert.equal(migrated.snapshot.folioSnapshot, 'premigration');
+assert.equal(migrated.state.schemaVersion, 1);
+assert.equal(migrated.state.experimentalPaydayRunway, false);
+assert.equal(migrated.state.paydayDate, null);
+assert.equal(migrated.state.paydayAmountMinor, null);
+assert.equal(migrated.state.upcomingBills, null);
+assert.equal(migrated.state.installments, null);
+assert.equal(migrated.state.gameya, null);
+assert.equal(migrated.state.commitments, null);
+assert.equal(migrated.state.savingsReservedMinor, null);
+assert.equal(migrated.state.emergencyReserveMinor, null);
 
 const again = FolioData.migrate(migrated.state, null);
 assert.equal(again.snapshot, null, 'a second launch does not take another snapshot');
+assert.equal(again.state.experimentalPaydayRunway, false);
 assert.equal(again.state.budgets.EGP['Food & drinks'], 350050, 'budgets are not converted twice');
 assert.equal(again.state.transactions.length, 4);
 
@@ -283,5 +294,58 @@ assert.equal(serialDay.getFullYear(), 2025);
 assert.equal(serialDay.getMonth(), 9);
 assert.equal(serialDay.getDate(), 10);
 assert.throws(() => FolioData.transactionsFromCsv(exported.replace('"135.50"', '"nope"')), /amount/i);
+
+const runwayState = FolioData.migrate({
+  schemaVersion: 1,
+  currency: 'EGP',
+  experimentalPaydayRunway: true,
+  paydayDate: '2026-10-26',
+  paydayAmountMinor: 1500000,
+  paydayCurrency: 'EGP',
+  upcomingBills: [],
+  installments: [{ id: 'i1', amountMinor: 100, currency: 'EGP', due: '2026-10-20' }],
+  gameya: [],
+  commitments: [{ id: 'rent', kind: 'rent', amountMinor: 100, currency: 'EGP', due: '2026-10-20', paid: false, confirmed: true }],
+  savingsReservedMinor: 0,
+  emergencyReserveMinor: 5000,
+  reportedBalanceMinor: 10,
+  transactions: [],
+  budgets: { EGP: { Shopping: 4000 } }
+}, null);
+assert.equal(runwayState.snapshot, null, 'schema stays 1 when payday fields are added');
+assert.equal(runwayState.state.schemaVersion, 1);
+assert.equal(runwayState.state.experimentalPaydayRunway, true);
+assert.equal(runwayState.state.paydayAmountMinor, 1500000);
+assert.equal(runwayState.state.budgets.EGP.Shopping, 4000, 'schema 1 budgets are already minor');
+assert.equal(runwayState.state.installments[0].amountMinor, 100);
+const runwayAgain = FolioData.migrate(runwayState.state, null);
+assert.equal(runwayAgain.snapshot, null);
+assert.equal(runwayAgain.state.budgets.EGP.Shopping, 4000, 'payday migration does not multiply budgets');
+assert.equal(runwayAgain.state.paydayAmountMinor, 1500000);
+const restoredRunway = FolioData.restoreBackup(JSON.stringify(FolioData.buildBackup(runwayState.state)));
+assert.equal(restoredRunway.experimentalPaydayRunway, true);
+assert.equal(restoredRunway.paydayDate, '2026-10-26');
+assert.equal(restoredRunway.savingsReservedMinor, 0);
+assert.equal(restoredRunway.emergencyReserveMinor, 5000);
+same(restoredRunway.upcomingBills, []);
+same(restoredRunway.commitments, [{ id: 'rent', kind: 'rent', amountMinor: 100, currency: 'EGP', due: '2026-10-20', paid: false, confirmed: true }]);
+
+const messyRunway = FolioData.migrate({
+  schemaVersion: 1,
+  paydayAmountMinor: 10.5,
+  paydayDate: 'October',
+  upcomingBills: 'nope',
+  experimentalPaydayRunway: 'yes',
+  savingsReservedMinor: -5
+}, null);
+assert.equal(messyRunway.state.schemaVersion, 1);
+assert.equal(messyRunway.state.experimentalPaydayRunway, false);
+assert.equal(messyRunway.state.paydayAmountMinor, null);
+assert.equal(messyRunway.state.legacyPaydayAmount, 10.5);
+assert.equal(messyRunway.state.paydayDate, null);
+assert.equal(messyRunway.state.upcomingBills, null);
+assert.equal(messyRunway.state.legacyUpcomingBills, 'nope');
+assert.equal(messyRunway.state.savingsReservedMinor, null);
+assert.equal(messyRunway.state.legacySavingsReserved, -5);
 
 console.log('PASS money, migration, backup and legacy CSV checks');

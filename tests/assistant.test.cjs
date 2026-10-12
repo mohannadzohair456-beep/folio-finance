@@ -399,6 +399,116 @@ check('the bundle stays offline and clock-free', () => {
   ]);
 });
 
+const Runway = require('../android/app/src/main/assets/payday-runway.js');
+
+check('payday runway flag stays off the existing safe-to-spend path', () => {
+  const off = Object.assign({}, ledger, {
+    experimentalPaydayRunway: false,
+    paydayDate: '2026-10-26',
+    paydayAmountMinor: 1,
+    paydayCurrency: 'EGP',
+    upcomingBills: [],
+    installments: [],
+    gameya: [],
+    savingsReservedMinor: 0,
+    emergencyReserveMinor: 0
+  });
+  assert.equal(A.safeToSpend(off).amount_minor, A.safeToSpend(ledger).amount_minor);
+  assert.match(A.canAfford(off, { amount_minor: 50000, currency: 'EGP' }).explanation, /^Yes\./);
+});
+
+check('payday runway flag explains can_afford and safe_to_spend with numbers', () => {
+  const clock = Date.parse('2026-10-12T09:00:00.000Z');
+  const state = {
+    experimentalPaydayRunway: true,
+    currency: 'EGP',
+    now: clock,
+    timeZone: '+03:00',
+    reportedBalanceMinor: 14000,
+    balanceReportedAt: clock - 86400000,
+    monthlyBudgetMinor: 100,
+    monthlyIncomeMinor: 900000,
+    paydayDate: '2026-10-26',
+    paydayAmountMinor: 900000,
+    paydayCurrency: 'EGP',
+    commitments: [],
+    savingsReservedMinor: 0,
+    emergencyReserveMinor: 0,
+    transactions: [
+      { id: 'pending', amountMinor: 5000, currency: 'EGP', direction: 'expense', source: 'notification', review: true, occurredAt: clock - 1000 }
+    ]
+  };
+  const engine = Runway.evaluate({
+    now: clock,
+    currency: 'EGP',
+    reportedBalanceMinor: 14000,
+    balanceReportedAt: state.balanceReportedAt,
+    transactions: [],
+    paydayDate: '2026-10-26',
+    paydayAmountMinor: 900000,
+    paydayCurrency: 'EGP',
+    commitments: [],
+    savingsReservedMinor: 0,
+    emergencyBufferMinor: 0
+  });
+  const safe = A.safeToSpend(state);
+  assert.equal(engine.status, 'ok');
+  assert.equal(engine.safe_to_spend_minor, 14000);
+  assert.equal(engine.per_day_minor, 1000);
+  assert.equal(safe.amount_minor, 14000);
+  assert.equal(safe.details.available_now_minor, 14000);
+  assert.equal(safe.details.unconfirmed_net_minor, -5000);
+  assert.match(safe.explanation, /available now/i);
+  assert.match(safe.explanation, /Unconfirmed notification/);
+  assert.equal(safe.details.status, 'ok');
+  assert.equal(safe.details.per_day_minor, 1000);
+  assert.match(safe.explanation, /EGP 140\.00/);
+  assert.match(safe.explanation, /EGP 10\.00/);
+  assert.match(safe.explanation, /per day/);
+  assert.notEqual(safe.explanation, 'Yes');
+  assert.notEqual(safe.explanation, 'No');
+  const classic = A.safeToSpend(Object.assign({}, state, { experimentalPaydayRunway: false }));
+  assert.notEqual(classic.amount_minor, safe.amount_minor);
+  const yes = A.canAfford(state, { amount_minor: 5000, currency: 'EGP' });
+  assert.equal(yes.affordable, true);
+  assert.equal(yes.amount_minor, 9000);
+  assert.match(yes.explanation, /EGP 50\.00/);
+  assert.match(yes.explanation, /EGP 90\.00/);
+  assert.equal(/^(Yes|No)\.?$/.test(yes.explanation), false);
+  const no = A.canAfford(state, { amount_minor: 20000, currency: 'EGP' });
+  assert.equal(no.affordable, false);
+  assert.match(no.explanation, /EGP 200\.00/);
+  assert.match(no.explanation, /exceeds/);
+  const missing = Object.assign({}, state);
+  delete missing.paydayDate;
+  const blocked = A.canAfford(missing, { amount_minor: 5000, currency: 'EGP' });
+  assert.equal(blocked.affordable, null);
+  assert.equal(blocked.amount_minor, null);
+  assert.match(blocked.explanation, /insufficient data/);
+  assert.ok(blocked.details.missing.indexOf('payday_date') >= 0);
+  assert.match(blocked.explanation, /EGP 50\.00/);
+  const asked = A.planCommand('Can I afford 50?', state);
+  assert.equal(asked.intent, 'can_afford');
+  assert.match(asked.answer, /EGP 140\.00/);
+  assert.match(asked.answer, /EGP 50\.00/);
+  const mixed = A.canAfford(state, { amount_minor: 100, currency: 'USD' });
+  assert.equal(mixed.affordable, null);
+  assert.match(mixed.explanation, /never converted or mixed/);
+});
+
+check('a flagged runway without the engine does not invent a number', () => {
+  const saved = global.FolioPaydayRunway;
+  delete global.FolioPaydayRunway;
+  try {
+    const safe = A.safeToSpend({ experimentalPaydayRunway: true, currency: 'EGP', reportedBalanceMinor: 1, balanceReportedAt: 1 });
+    assert.equal(safe.amount_minor, null);
+    assert.match(safe.explanation, /insufficient data/);
+    assert.equal(A.canAfford({ experimentalPaydayRunway: true }, { amount_minor: 100, currency: 'EGP' }).affordable, null);
+  } finally {
+    global.FolioPaydayRunway = saved;
+  }
+});
+
 check('browser global matches the Node export', () => {
   const src = fs.readFileSync(path.join(__dirname, '../android/app/src/main/assets/assistant.js'), 'utf8');
   const context = vm.createContext({});

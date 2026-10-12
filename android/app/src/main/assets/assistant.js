@@ -993,7 +993,201 @@
     return uniqSort(assumed);
   }
 
+  function runwayEnabled(state) {
+    return asState(state).experimentalPaydayRunway === true;
+  }
+
+  function runwayEngine() {
+    var host = typeof globalThis !== 'undefined' ? globalThis : null;
+    if (host && host.FolioPaydayRunway && typeof host.FolioPaydayRunway.evaluate === 'function') return host.FolioPaydayRunway;
+    return null;
+  }
+
+  function readPresent(obj, keys, kind) {
+    var found = false;
+    var value = null;
+    var conflict = false;
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      if (!Object.prototype.hasOwnProperty.call(obj, keys[i])) continue;
+      var raw = obj[keys[i]];
+      if (raw == null || raw === '') continue;
+      var ok = kind === 'array' ? Array.isArray(raw) : typeof raw === 'string';
+      if (!ok) { conflict = true; continue; }
+      if (!found) { found = true; value = raw; }
+      else if (kind === 'array' ? JSON.stringify(value) !== JSON.stringify(raw) : value !== raw) conflict = true;
+    }
+    return { present: found && !conflict, value: found && !conflict ? value : null, conflict: conflict };
+  }
+
+  function buildRunwayInput(src) {
+    var extraMissing = [];
+    var extraExcluded = [];
+    var verifiedAmount = readInt(src, ['verifiedBalanceMinor', 'verified_balance_minor']);
+    var verifiedAt = readInt(src, ['verifiedBalanceAt', 'verified_balance_at']);
+    var reportedAmount = readInt(src, ['reportedBalanceMinor', 'self_reported_balance_minor']);
+    var reportedAt = readInt(src, ['balanceReportedAt', 'self_reported_at']);
+    if (verifiedAmount.conflict || verifiedAt.conflict || reportedAmount.conflict || reportedAt.conflict) extraMissing.push('conflicting_fields');
+    var amount = null;
+    var at = null;
+    var track = null;
+    if (verifiedAmount.present && verifiedAt.present) {
+      amount = verifiedAmount.value;
+      at = verifiedAt.value;
+      track = 'verified';
+      if (reportedAmount.present) extraExcluded.push({ reason: 'self_reported_not_added' });
+    } else if (verifiedAmount.present) {
+      amount = verifiedAmount.value;
+      track = 'verified';
+    } else {
+      if (reportedAmount.present) amount = reportedAmount.value;
+      if (reportedAt.present) at = reportedAt.value;
+      if (reportedAmount.present || reportedAt.present) track = 'self_reported';
+    }
+    var paydayDate = readPresent(src, ['paydayDate', 'payday_date'], 'string');
+    var paydayCurrency = readPresent(src, ['paydayCurrency', 'payday_currency'], 'string');
+    var commitments = readPresent(src, ['commitments'], 'array');
+    if (paydayDate.conflict || paydayCurrency.conflict || commitments.conflict) extraMissing.push('conflicting_fields');
+    var paydayAmount = readInt(src, ['paydayAmountMinor', 'payday_amount_minor']);
+    var savings = readInt(src, ['savingsReservedMinor', 'savings_reserved_minor']);
+    var emergency = readInt(src, ['emergencyBufferMinor', 'emergencyReserveMinor', 'emergency_buffer_minor', 'emergency_reserve_minor']);
+    var stale = readInt(src, ['staleAfterDays', 'stale_after_days']);
+    if (paydayAmount.conflict || savings.conflict || emergency.conflict || stale.conflict) extraMissing.push('conflicting_fields');
+    var input = {
+      now: Object.prototype.hasOwnProperty.call(src, 'now') ? src.now : null,
+      currency: typeof src.currency === 'string' ? src.currency : null,
+      reportedBalanceMinor: amount,
+      balanceReportedAt: at,
+      transactions: Array.isArray(src.transactions) ? src.transactions : null,
+      paydayDate: paydayDate.present ? paydayDate.value : null,
+      paydayAmountMinor: paydayAmount.present ? paydayAmount.value : null,
+      paydayCurrency: paydayCurrency.present ? paydayCurrency.value : null,
+      commitments: commitments.present ? commitments.value : null,
+      savingsReservedMinor: savings.present ? savings.value : null,
+      emergencyBufferMinor: emergency.present ? emergency.value : null
+    };
+    if (stale.present) input.staleAfterDays = stale.value;
+    else if (stale.conflict) extraMissing.push('stale_after_days');
+    return { input: input, extraMissing: uniqSort(extraMissing), extraExcluded: extraExcluded, track: track };
+  }
+
+  function runwayExplanation(result, cost) {
+    var known = result && (result.status === 'ok' || result.status === 'shortfall');
+    if (!known) {
+      var missing = result && result.missing && result.missing.length ? result.missing.join(', ') : 'unknown';
+      var blocked = 'Status: insufficient data. No safe-to-spend number was calculated. Missing or stale inputs: ' + missing + '.';
+      if (cost) blocked += ' The ' + formatMoney(cost.amount, cost.currency) + ' purchase was not judged.';
+      return blocked;
+    }
+    var total = formatMoney(result.safe_to_spend_minor, result.currency);
+    var perDay = formatMoney(result.per_day_minor, result.currency);
+    var text = 'Available now until payday is ' + total + ', which is ' + perDay + ' per day across ' + result.days + (result.days === 1 ? ' day.' : ' days.');
+    if (result.status === 'shortfall') text += ' The runway is short by ' + formatMoney(-result.safe_to_spend_minor, result.currency) + '.';
+    text += ' Projected payday income was not added to available now.';
+    if (result.unconfirmed_transactions && result.unconfirmed_transactions.length) {
+      text += ' Unconfirmed notification transactions are excluded from that number.';
+      if (typeof result.unconfirmed_net_minor === 'number') text += ' Shown separately, their net is ' + formatMoney(result.unconfirmed_net_minor, result.currency) + '.';
+    }
+    if (cost) {
+      var left = result.safe_to_spend_minor - cost.amount;
+      if (left >= 0) text += ' ' + formatMoney(cost.amount, cost.currency) + ' fits in that ' + total + ' and leaves ' + formatMoney(left, cost.currency) + '.';
+      else text += ' ' + formatMoney(cost.amount, cost.currency) + ' exceeds that ' + total + ' by ' + formatMoney(-left, cost.currency) + '.';
+    }
+    return text;
+  }
+
+  function withholdRunway(result, extraMissing, extraExcluded) {
+    var missing = uniqSort((result.missing || []).concat(extraMissing || []));
+    var excluded = (result.excluded || []).concat(extraExcluded || []);
+    if (extraMissing && extraMissing.length && result.status !== 'insufficient data') {
+      return {
+        status: 'insufficient data',
+        currency: result.currency,
+        safe_to_spend_minor: null,
+        available_now_minor: null,
+        per_day_minor: null,
+        days: null,
+        calendar_days: null,
+        remainder_minor: null,
+        breakdown: [],
+        bills_due: [],
+        missing: missing,
+        excluded: excluded,
+        payday: result.payday || null
+      };
+    }
+    return Object.assign({}, result, { missing: missing, excluded: excluded });
+  }
+
+  function runwaySafeToSpend(state) {
+    var engine = runwayEngine();
+    var src = asState(state);
+    if (!engine) {
+      return {
+        explanation: 'Status: insufficient data. No safe-to-spend number was calculated. Missing or stale inputs: payday_runway.',
+        assumed: ['payday_runway'],
+        currency: typeof src.currency === 'string' ? src.currency : null,
+        amount_minor: null,
+        balance_track: null,
+        details: { status: 'insufficient data', missing: ['payday_runway'], safe_to_spend_minor: null, per_day_minor: null, breakdown: [], bills_due: [] }
+      };
+    }
+    var built = buildRunwayInput(src);
+    var result = withholdRunway(engine.evaluate(built.input), built.extraMissing, built.extraExcluded);
+    return {
+      explanation: runwayExplanation(result, null),
+      assumed: result.missing.slice(),
+      currency: result.currency,
+      amount_minor: result.safe_to_spend_minor,
+      balance_track: built.track,
+      details: result
+    };
+  }
+
+  function runwayCanAfford(state, parsed) {
+    var safe = runwaySafeToSpend(state);
+    if (safe.amount_minor == null || !safe.details || safe.details.status === 'insufficient data') {
+      return {
+        explanation: runwayExplanation(safe.details, parsed),
+        assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
+        currency: parsed.currency,
+        amount_minor: null,
+        affordable: null,
+        balance_track: safe.balance_track,
+        details: Object.assign({ cost_minor: parsed.amount, cost_currency: parsed.currency }, safe.details || {})
+      };
+    }
+    if (parsed.currency !== safe.currency) {
+      return {
+        explanation: 'Cannot compare ' + formatMoney(parsed.amount, parsed.currency) + ' with ' + safe.currency + '. Currencies are never converted or mixed. Status: insufficient data.',
+        assumed: uniqSort(['currency_mismatch'].concat(parsed.assumed)),
+        currency: null,
+        amount_minor: null,
+        affordable: null,
+        balance_track: safe.balance_track,
+        details: { status: 'insufficient data', missing: ['currency_mismatch'], cost_minor: parsed.amount, cost_currency: parsed.currency, ledger_currency: safe.currency }
+      };
+    }
+    var left = safe.amount_minor - parsed.amount;
+    return {
+      explanation: runwayExplanation(safe.details, parsed),
+      assumed: uniqSort(safe.assumed.concat(parsed.assumed)),
+      currency: parsed.currency,
+      amount_minor: left,
+      affordable: left >= 0,
+      balance_track: safe.balance_track,
+      details: Object.assign({ cost_minor: parsed.amount, remaining_minor: left }, safe.details)
+    };
+  }
+
   function safeToSpend(state, options) {
+    if (runwayEnabled(state)) {
+      var runway = runwaySafeToSpend(state);
+      if (options && options.category) {
+        runway = Object.assign({}, runway, { explanation: runway.explanation + ' A category limit was not applied.' });
+      }
+      return runway;
+    }
     var report = analyze(state);
     var category = options && options.category ? options.category : null;
     var safe = null;
@@ -1079,6 +1273,7 @@
         details: {}
       };
     }
+    if (runwayEnabled(state)) return runwayCanAfford(state, parsed);
     var safe = safeToSpend(state);
     if (parsed.currency !== safe.currency) {
       return {
