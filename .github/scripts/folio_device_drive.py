@@ -34,6 +34,50 @@ def is_control_label(text, needle):
     return normalized_label(text) == normalized_label(needle)
 
 
+DIALOG_TITLES = (
+    "new transaction",
+    "edit transaction",
+    "set monthly budget",
+    "edit budget",
+)
+
+
+def choose_blur_node(nodes, height, width):
+    """Pick a non-input to tap so the keyboard closes.
+
+    A dialog title wins over the folio wordmark. The wordmark stays in the
+    tree above the sheet, and tapping it hits the overlay and closes the form.
+    Returns None when a Close control is up but the title is not visible;
+    the caller then taps inside the sheet instead of the wordmark.
+    """
+    titles = []
+    marks = []
+    dialog = False
+    for node in nodes:
+        text = node.get("text") or ""
+        if node["x2"] - node["x1"] < 24 or node["y2"] - node["y1"] < 24:
+            continue
+        if not (0 <= node["cx"] <= width and 0 <= node["cy"] <= height):
+            continue
+        label = normalized_label(text)
+        if is_control_label(text, "Close"):
+            dialog = True
+        if any(wanted in label for wanted in DIALOG_TITLES):
+            titles.append(node)
+            dialog = True
+        elif is_blur_target(text) and not node["class"].endswith("EditText") and not node["class"].endswith("Button"):
+            marks.append(node)
+    if titles:
+        titles.sort(key=lambda node: node["cy"])
+        return titles[0]
+    if dialog:
+        return None
+    if marks:
+        marks.sort(key=lambda node: node["cy"])
+        return marks[0]
+    return None
+
+
 def is_blur_target(text):
     """A non-input label that releases focus without closing a dialog.
 
@@ -529,19 +573,16 @@ class Driver:
         transaction sheet's backdrop, which closes the form.
         """
         nodes = self.dump_nodes()
-        targets = [
-            node for node in nodes
-            if node["text"] and self.visible(node)
-            and not node["class"].endswith("EditText")
-            and not node["class"].endswith("Button")
-            and is_blur_target(node["text"])
-        ]
-        if targets:
-            targets.sort(key=lambda node: node["cy"])
-            self.tap_node(targets[0])
+        chosen = choose_blur_node(nodes, self.height, self.width)
+        if chosen is not None:
+            self.tap_node(chosen)
             return
-        if any(is_control_label(node["text"], "Close") for node in nodes):
-            print("keyboard open over a dialog, not tapping the overlay", flush=True)
+        if any(is_control_label(node["text"], "Close") and self.visible(node) for node in nodes):
+            x = self.width // 2
+            y = max(140, int(self.height * 0.2))
+            print(f"blur inside dialog {x},{y}", flush=True)
+            self.shell(f"input tap {x} {y}")
+            time.sleep(0.4)
             return
         x = self.width // 2
         y = max(90, int(self.height * 0.08))
@@ -703,7 +744,11 @@ class Driver:
 
     def fill_labeled(self, label, value, numeric=False):
         if not numeric:
-            self.hide_keyboard()
+            # The transaction sheet auto-focuses its first field. Blurring the
+            # wordmark above that sheet clicks the overlay and closes it.
+            nodes = self.look(label)
+            if not self.candidates(nodes, label):
+                self.hide_keyboard()
             self.tap_field(label)
             self.type_text(value)
             return
@@ -1050,6 +1095,19 @@ Complete
         raise DriveError("Open Folio should not be a blur target")
     if is_blur_target("Add transaction"):
         raise DriveError("Add transaction should not be a blur target")
+    wordmark = {
+        "text": "folio", "class": "android.widget.TextView",
+        "x1": 42, "y1": 44, "x2": 312, "y2": 147, "cx": 177, "cy": 95,
+    }
+    title = {
+        "text": "New transaction", "class": "android.widget.TextView",
+        "x1": 80, "y1": 360, "x2": 700, "y2": 430, "cx": 390, "cy": 395,
+    }
+    chosen = choose_blur_node([wordmark, title], 1920, 1080)
+    if chosen is None or chosen["text"] != "New transaction":
+        raise DriveError("dialog title should win over the wordmark")
+    if choose_blur_node([wordmark], 1920, 1080)["text"] != "folio":
+        raise DriveError("wordmark should blur the onboarding page")
     if not field_holds("8420.50, Current available balance (EGP)", "8420.50"):
         raise DriveError("field_holds rejected a clean balance")
     if not field_holds("8420.5, Current available balance (EGP)", "8420.50"):
