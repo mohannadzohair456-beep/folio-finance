@@ -10,6 +10,8 @@
   'use strict';
   const SCHEMA_VERSION = 2;
   const BUDGET_MINOR_SCHEMA = 1;
+  const BALANCE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+  const ACCOUNT_TYPES = { cash: 1, bank: 1, wallet: 1, prepaid: 1, credit: 1 };
   const STORAGE_KEY = 'folio_finance_v1';
   const SNAPSHOT_KEY = 'folio_finance_premigration_snapshot';
   const RESTORE_SNAPSHOT_KEY = 'folio_finance_pre_restore_snapshot';
@@ -35,6 +37,8 @@
       monthlyIncomeMinor: 0,
       reportedBalanceMinor: null,
       balanceReportedAt: null,
+      balanceUntracked: false,
+      accounts: [],
       v2Onboarded: false,
       legacyUnparsedBudgets: [],
       legacyQueue: [],
@@ -277,6 +281,8 @@
     if (input.balanceReportedAt != null && input.balanceReportedAt !== '' && reportedAt == null) {
       state.legacyBalanceReportedAt = clone(input.balanceReportedAt);
     }
+    state.balanceUntracked = input.balanceUntracked === true;
+    assignAccounts(state, input);
 
     const monthlyBudget = finiteMinor(input.monthlyBudgetMinor);
     state.monthlyBudgetMinor = monthlyBudget == null || monthlyBudget < 0 ? 0 : monthlyBudget;
@@ -308,6 +314,55 @@
     state.legacyQueue = Array.isArray(input.legacyQueue) ? clone(input.legacyQueue) : [];
     assignRunway(state, input);
     return { state: state, snapshot: snapshot, migrated: needsMigration };
+  }
+
+  function coerceAccount(entry, index) {
+    if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const type = ACCOUNT_TYPES[entry.type] ? entry.type : 'cash';
+    const currency = CURRENCIES.indexOf(entry.currency) >= 0 ? entry.currency : null;
+    const asOf = transactionTime(entry.asOf);
+    const balanceMinor = typeof entry.balanceMinor === 'number' && Number.isSafeInteger(entry.balanceMinor) ? entry.balanceMinor : null;
+    return {
+      id: typeof entry.id === 'string' && entry.id ? entry.id.slice(0, 80) : 'account-' + index,
+      name: typeof entry.name === 'string' ? entry.name.slice(0, 80) : '',
+      type: type,
+      currency: currency,
+      balanceMinor: balanceMinor,
+      asOf: asOf,
+      provenance: entry.provenance === 'csv' ? 'csv' : 'manual',
+      untracked: entry.untracked === true
+    };
+  }
+
+  function assignAccounts(state, input) {
+    if (!Array.isArray(input.accounts)) {
+      state.accounts = [];
+      if (input.accounts != null) state.legacyAccounts = clone(input.accounts);
+      return;
+    }
+    state.accounts = input.accounts.map(coerceAccount).filter(Boolean);
+  }
+
+  function balanceFreshness(record, now) {
+    if (!record || record.balanceMinor == null || !Number.isFinite(Number(record.balanceMinor))) return 'unknown';
+    const asOf = record.asOf != null ? record.asOf : record.balanceReportedAt;
+    if (asOf == null || !Number.isFinite(Number(asOf)) || !Number.isFinite(Number(now))) return 'unknown';
+    if (Number(asOf) > Number(now)) return 'unknown';
+    if (Number(now) - Number(asOf) > BALANCE_STALE_MS) return 'stale';
+    return 'fresh';
+  }
+
+  function untrackedMovement(record, transactions) {
+    if (record && (record.untracked === true || record.balanceUntracked === true)) return true;
+    const asOf = record && (record.asOf != null ? record.asOf : record.balanceReportedAt);
+    if (asOf == null || !Number.isFinite(Number(asOf)) || !Array.isArray(transactions)) return false;
+    const currency = record.currency;
+    return transactions.some(tx => {
+      if (!tx || tx.source !== 'notification') return false;
+      if (currency && tx.currency && tx.currency !== currency) return false;
+      const when = Number(tx.occurredAt);
+      return Number.isFinite(when) && when > Number(asOf);
+    });
   }
 
   function strictMinor(value) {
@@ -578,6 +633,7 @@
         importedSource: cell('source').slice(0, 40),
         status: 'confirmed'
       });
+      // A spreadsheet is not an account list and does not set a confirmed balance.
     }
     return records;
   }
@@ -592,6 +648,8 @@
     majorToMinor: majorToMinor,
     transactionTime: transactionTime,
     migrate: migrate,
+    balanceFreshness: balanceFreshness,
+    untrackedMovement: untrackedMovement,
     transactionStatus: transactionStatus,
     summarize: summarize,
     budgetTotalMinor: budgetTotalMinor,

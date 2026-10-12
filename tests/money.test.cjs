@@ -385,4 +385,42 @@ assert.equal(statusAgain.state.transactions.find(t => t.id === 'alert').status, 
 assert.equal(statusAgain.state.budgets.EGP.Shopping, 4000);
 assert.equal(FolioData.transactionsFromCsv(quoted)[0].status, 'confirmed', 'a user-imported CSV row is confirmed');
 
+const day = 24 * 60 * 60 * 1000;
+const balanceNow = Date.UTC(2026, 9, 12);
+const withAccounts = FolioData.migrate({
+  schemaVersion: 2,
+  currency: 'EGP',
+  reportedBalanceMinor: 842050,
+  balanceReportedAt: balanceNow - day,
+  transactions: [
+    { id: 'alert', source: 'notification', currency: 'EGP', direction: 'expense', amountMinor: 1000, occurredAt: balanceNow, merchant: 'Bank', category: 'Other' }
+  ],
+  accounts: [
+    { id: 'cash', name: 'Wallet', type: 'cash', currency: 'EGP', balanceMinor: 20000, asOf: balanceNow - day, provenance: 'manual' },
+    { id: 'stale', name: 'Bank <note>', type: 'bank', currency: 'EGP', balanceMinor: 50000, asOf: balanceNow - 8 * day, provenance: 'notification', untracked: false },
+    { name: 'Mystery', type: 'nope', balanceMinor: '12.5', asOf: 'yesterday' }
+  ]
+}, null);
+assert.equal(withAccounts.snapshot, null, 'adding accounts does not open a new schema');
+assert.equal(withAccounts.state.reportedBalanceMinor, 842050, 'notification rows do not rewrite the entered balance');
+assert.equal(withAccounts.state.accounts.length, 3);
+assert.equal(withAccounts.state.accounts[0].balanceMinor, 20000);
+assert.equal(withAccounts.state.accounts[1].provenance, 'manual', 'a notification is not stored as the source of a balance');
+assert.equal(withAccounts.state.accounts[1].name, 'Bank <note>');
+assert.equal(withAccounts.state.accounts[2].balanceMinor, null);
+assert.equal(withAccounts.state.accounts[2].type, 'cash');
+assert.equal(FolioData.balanceFreshness(withAccounts.state.accounts[0], balanceNow), 'fresh');
+assert.equal(FolioData.balanceFreshness(withAccounts.state.accounts[1], balanceNow), 'stale');
+assert.equal(FolioData.balanceFreshness(withAccounts.state.accounts[2], balanceNow), 'unknown');
+assert.equal(FolioData.balanceFreshness({ balanceMinor: 842050, balanceReportedAt: null }, balanceNow), 'unknown');
+assert.equal(FolioData.untrackedMovement({
+  asOf: balanceNow - day,
+  currency: 'EGP'
+}, withAccounts.state.transactions), true);
+assert.equal(FolioData.untrackedMovement(withAccounts.state.accounts[0], []), false);
+const accountRoundTrip = FolioData.restoreBackup(JSON.stringify(FolioData.buildBackup(withAccounts.state)));
+assert.equal(accountRoundTrip.accounts[0].balanceMinor, 20000);
+assert.equal(accountRoundTrip.accounts[0].asOf, balanceNow - day);
+assert.equal(FolioData.transactionsFromCsv('date,amount,currency,direction,merchant,category\n2026-10-01,10,EGP,expense,Shop,Other').some(row => row.balanceMinor != null), false);
+
 console.log('PASS money, migration, backup and legacy CSV checks');
