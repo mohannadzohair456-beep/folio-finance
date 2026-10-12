@@ -68,6 +68,16 @@ Cold-start TotalTime for signed v0.3.43 is recorded by `cold-launch-latency` on 
 
 Run [38255733542](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38255733542) on head `a981ac3` (checkout merge `61b8b289`) is the baseline. `latency.txt` TotalTime medians for v0.3.43 are 923 ms on API 26, 1455 ms on API 34, and 2188 ms on API 35. API 34's content poll printed `LATENCY_WEBVIEW_CONTENT_FAILED` and has no content time. `v0233-page-on-api26` printed `V0233_UI_BLANK 0.2.33 33 sdk 26`. `upgrade-from-v0233` on API 34 and API 35 printed `UPGRADE_DATA_SURVIVED 0.3.61 161`. `clean-launch` on API 26 and API 35 printed `LAUNCH_OK 0.3.61 161`. The figures and the runner image `ubuntu24` `20261004.327.1` are in `docs/operations/performance-baseline.md`. A green API 26 blank job is not a data-survival pass.
 
+## FOL-108 / FOL-113 — API 35 balance step (12 Oct 2026)
+
+Run [38259266231](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38259266231) checked out main `b2396e9`. It was a `workflow_run` from a pull-request APK build, so `upgrade-from-schema1` was skipped. `upgrade-from-v0233 (34)` succeeded. `upgrade-from-v0233 (35)` printed `FAILED could not leave the balance step`. Artifacts `folio-upgrade-api35` are `01-onboarding.png`, `02-onboarding-filled.png`, and `03-failure.png`. The Continue button bounds were `[690,1874][1039,1920]` on a 1080×1920 screen, center y=1897. Four nudges that started on the form left that y unchanged. The focused balance field text was `8420.5061500099000, Current available balance (EGP)`: `8420.50`, then a `6` from a tap on the number pad, then `15000`, then a `9`, then `9000`. `clean-launch` on API 26 and API 35 succeeded. `promote-release` and `withhold-latest-on-failure` were both skipped. `failure()` is false when one needed job failed and the other was skipped.
+
+The same balance miss happened on the main push of `e071dc3`: [38260676035](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38260676035). Schema 1 passed, withhold ran, and promote was skipped. v0.3.66 stayed a prerelease and `releases/latest` stayed v0.3.63.
+
+In run 38259266231, `cold-launch-latency (34)` printed `CONTENT_FOUND=1` for two samples, then one sample of 15 dumps missed `Meet Folio`. The job still printed `LATENCY_OK` and `LATENCY_WEBVIEW_CONTENT_FAILED`. TotalTime was kept. The driver now retries a missed content sample. It does not invent a content time, and the after-upgrade data check is unchanged.
+
+The driver and withhold fix is `52e86bf`. No application source, applicationId, or signing change.
+
 ## Update — 12 Oct 2026, balance freshness (H2)
 
 Merged to main as `e071dc32ef2386fffc3f7829b658a684bf532e46` (https://github.com/mohannadzohair456-beep/folio-finance/pull/17, squash of `9f06f13`). This is the H2 trustworthiness slice: a figure the user typed is labeled as an entered balance, not a bank balance.
