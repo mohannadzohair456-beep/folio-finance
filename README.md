@@ -1,77 +1,63 @@
-# Folio — Important Android Update Notice
+# Folio
 
-> **DO NOT install `app-debug.apk` as an update to an existing Folio app.** Early test APKs were built with different temporary signing keys; Android rejects them as conflicting packages. The release workflow now **requires one permanent signing certificate** and will not publish new disposable debug APKs. The repository signing password must be corrected by its owner before the first permanent `app-release.apk` can be published.
->
-> **Do not uninstall an app holding financial data.** Export transactions first. The next signed release includes **Transactions → Import CSV** to recover transaction history, but it does not restore every app setting or unexported data. Read the [step-by-step signing and recovery guide](SIGNING-AND-RECOVERY.md).
+Offline Android finance app. Records stay on the device. There is no `INTERNET` permission and no account.
 
-[Future permanent releases](https://github.com/mohannadzohair456-beep/folio-finance/releases/latest) · [Signing secrets](https://github.com/mohannadzohair456-beep/folio-finance/settings/secrets/actions)
+**Current signed release:** [Folio v0.3.40](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.40) · [all releases](https://github.com/mohannadzohair456-beep/folio-finance/releases)
 
----
+The file to install is `app-release.apk` from that release (119,860 bytes, versionCode 140, versionName 0.3.40, package `com.folio.finance.app`). It is signed with the pinned Folio certificate. Later releases from `main` use the same certificate and a higher versionCode, so they install over this one.
 
-# Folio 2.0 Beta — Your Financial Companion
+## Install or update
 
-**Latest verified test build:** [Folio beta APK build #25](https://github.com/mohannadzohair456-beep/folio-finance/releases/download/folio-test-25/app-debug.apk)  
-[All releases](https://github.com/mohannadzohair456-beep/folio-finance/releases) · [Product roadmap](PRODUCT-ROADMAP.md)
+Android 8.0 or newer. Download `app-release.apk` on a computer if the phone browser saves GitHub's HTML page instead of the APK, then open the file from Files.
 
-## What's new in Folio 2.0
+- Updating `com.folio.finance.app` when the certificate matches keeps the on-device books. Do not uninstall, and do not clear storage, unless you already have a JSON backup.
+- Do not install `app-debug.apk` or a `folio-test-*` build over the permanent app. Those used other keys or the old package name `com.folio.finance`, and Android will report a conflict.
+- `com.folio.finance` (the old debug id) is a different app. Its data does not move. Export CSV from it, import that CSV into the permanent app, then re-enter balances and budgets. After that, use **Settings → Export JSON**, which saves the whole workspace.
 
-- Branded 4-stage onboarding: welcome, optional financial starting balances and budgets, optional Android notification access, and setup confirmation.
-- Cleaner dashboard with no notification technical controls on Home. Manage notification capture and source-app allowlists in Settings.
-- Native branded launch indicator and motion-conscious premium interface.
-- **Ask Folio**: text instructions, optional Android voice-to-text, expense and income entry, balance snapshots, expected salary, monthly and category budgets, cash-flow summaries, and basic affordability estimates.
-- Every proposed financial write requires explicit review and confirmation. The assistant is a local rules engine, not a generative cloud AI model.
-- Basic English plus limited Egyptian Arabic numeric command recognition. Speech support depends on the Android device's installed recognizer, which may send audio to its service provider.
-- Reported balances are estimates: snapshot amount plus *recorded* transactions after that snapshot. Expected salary and target budgets are plans, not bank money or recorded income.
+CSV import adds transactions and leaves everything else in place. JSON import replaces the workspace after writing a local snapshot. Details are in [docs/release/data-migration.md](docs/release/data-migration.md) and [SIGNING-AND-RECOVERY.md](SIGNING-AND-RECOVERY.md).
 
-## Installation
+## What v0.3.40 adds over v0.2.33
 
-Download the APK and open it from your Android **Files → Downloads** application. Android 8.0+ is required. A mobile browser sometimes struggles with GitHub APK redirect downloads; in that case, download the build artifact ZIP on a computer or use the direct ChatGPT attachment.
+- Schema 1 storage, a one-time pre-migration snapshot, and category budgets stored as minor units.
+- JSON backup and restore of transactions, budgets, reported balance, salary, settings, allowlists, and onboarding.
+- CSV import that accepts the older Folio spreadsheet, including quoted fields and Excel serial dates.
+- Ask Folio inside the app, including a savings goal that is stored and is not a transaction.
+- v1, v2, and v3 signatures, zipalign, and an uncompressed `resources.arsc`. The launcher name is Folio.
 
-**Current limitation:** This prerelease uses a GitHub runner debug signature. It may not update over a previous Folio APK from a different build. Do not uninstall an older app that contains important records until you have reviewed and safely exported your data; CSV import/restore is not yet implemented. Stable signed releases require a correct private keystore and matching `FOLIO_KEYSTORE_B64` / `FOLIO_SIGNING_PASSWORD` secrets. The release-signing setup is currently not working.
+Release notes: [docs/release/release-notes.md](docs/release/release-notes.md).
 
-The automated GitHub Actions build validates Java transaction parsing, existing UI behavior, onboarding and assistant commands, then publishes an APK. This is not a substitute for testing on a real device and against your own bank's alert formats.
+## Notification capture
 
----
-# Folio — Personal Finance
-**Android-first, offline-first and free to install.** Branded app icon, dashboard, transactions, analytics, budgets, and optional notification recognition.
+Notification capture is optional.
 
-## Install the first test APK
-1. Open [Builds / Actions](https://github.com/mohannadzohair456-beep/folio-finance/actions/workflows/build-apk.yml).
-2. Open the newest successful run, then download the **Folio-TEST-APK** artifact and extract **app-debug.apk**.
-3. Open the APK on Android, approve installation from your Files/browser when prompted, and launch **Folio**. New installs start with a real empty workspace and a visible tracking setup guide.
-4. This is an early **test build** signed with a temporary debug key. Future release-signed builds will **not update over a test APK**, and the debug app will need to be uninstalled. Export any transactions before that switch.
+1. Finish onboarding. Tracking can be left off.
+2. In Settings, turn on monitoring and grant Android notification access only if you want automatic entry.
+3. Android 13 and later may block this for a sideloaded app until **Settings → Apps → Folio → Allow restricted settings** is enabled.
+4. Messages packages are on the allowlist by default. A bank app is included only after you add its package name.
+5. Folio reads new notifications from those packages. It does not read history, and it does not store the raw notification text.
 
-## Enable permanent, updateable signed releases
-**Never upload your .p12 signing key or passwords into this repository. It is currently PUBLIC.**
-Go to **Settings → Secrets and variables → Actions → New repository secret**. Use the *separate private Folio signing kit* previously provided in this conversation to add:
-- `FOLIO_KEYSTORE_B64` — the encoded contents of the Folio .p12 signing key.
-- `FOLIO_SIGNING_PASSWORD` — the password for that keystore (alias `folio`).
+Speech recognition, if you use the microphone button, is the device recognizer. That recognizer may send audio to its own provider. Folio does not add a network permission.
 
-Then select **Actions → Build Folio APK → Run workflow**. With both secrets set, the workflow signs Folio, publishes a new GitHub Release, and retains an APK as an Action artifact. The release APK download page will be [Folio Releases](https://github.com/mohannadzohair456-beep/folio-finance/releases/latest), and the direct APK URL will be [app-release.apk](https://github.com/mohannadzohair456-beep/folio-finance/releases/latest/download/app-release.apk) **after the first signed release succeeds**.
+## Build
 
-## Every update
-Commit changes to `main`. The same workflow tests and builds the app. With the same secret signing key, the `versionCode` increases per workflow run and you can install a newer release APK *over* the previous signed release without uninstalling. **Do not uninstall Folio or clear its data.** Export CSV as an additional precaution; full import/restore isn't implemented.
+[Build Folio APK](https://github.com/mohannadzohair456-beep/folio-finance/actions/workflows/build-apk.yml) runs tests on pull requests and, on `main`, signs the release with `FOLIO_KEYSTORE_B64` and `FOLIO_SIGNING_PASSWORD` (alias `folio`). A main build with missing or wrong secrets fails. It does not publish a debug APK instead.
 
-## Notification capture and privacy
-Grant Android Notification Access for Folio only if you want automatic detection. The user approves which source app package names to listen to; raw notification text is **not saved**. Only new, recognizable financial notifications are converted into editable transactions. Banks have different message patterns and some will need manual entry. Folio works without Internet permission, doesn't connect to bank accounts, and stores financial information on your device. No Play Store registration needed.
+versionCode is `100 + github.run_number`. versionName is `0.3.<run_number>`. The signed file is attached to the GitHub release and uploaded as the `Folio-Updateable-Signed-APK` artifact.
 
-## Project structure
-- `android/app/src/main/assets/index.html` — premium standalone Folio interface, charts, forms, settings.
-- `android/app/src/main/java/com/folio/finance/` — WebView + notification listener + local ingestion buffer + bank alert parser.
-- `.github/workflows/build-apk.yml` — free cloud Android build, test APK, signed release.
-- `tests/` — parser and UI sanity checks.
+Never commit the keystore or the password. The repository is public.
 
-**Security notice:** This repository was created PUBLIC. Consider making it PRIVATE under GitHub Settings. Never upload your financial data or signing key.
+Device checks that do not publish a release:
 
-## Getting real transactions to appear (tracking v0.2)
+- [Folio device upgrade](.github/workflows/folio-device-upgrade.yml) installs the v0.2.33 release, enters a balance, a budget, and a transaction through the UI, upgrades with `adb install -r`, and checks the screens. It also clean-installs the current release on API 26 and API 35.
+- The side-by-side workflow installs the old debug package and the permanent package together. That is not an in-place upgrade.
 
-1. From the Folio dashboard, tap **Enable** to opt into tracking. Then tap **Allow** and grant **Notification access** through Android settings.
-2. Android 13 and later may restrict this permission for sideloaded apps. If blocked, use **Android Settings → Apps → Folio → ⋮ → Allow restricted settings** only if you trust Folio, then return and grant notification access.
-3. Messages notifications are approved by default. If a bank sends alerts from its own app, enable tracking first, wait for a **new notification**, then select the app package under **Recently seen apps**. Only approved sources are parsed; raw notification bodies are not saved.
-4. Make a **new** transaction after setup. The dashboard shows processed, recognized and unrecognized counts to help locate failures. The app cannot read historical messages or fetch card transactions from your bank.
-5. For an unsupported bank notification, enter the expense manually. You can share a fully redacted template (no names, card/account details, PINs, passwords or codes) to improve supported message patterns.
-6. Totals use only the selected currency for the current calendar month. If a payment is in another currency, change **Reporting currency** in Settings.
+## Layout
 
-### Signing issue
+- `android/app/src/main/assets/` — the WebView UI, data migration, and Ask Folio.
+- `android/app/src/main/java/com/folio/finance/` — WebView shell, notification listener, parser, dedup.
+- `tests/` — parser, dedup, money and migration, UI, onboarding, assistant.
+- `docs/` — data model, migration, test results, release notes, handoff.
 
-If signing secrets are present but invalid, GitHub Actions will still attempt a **test APK** fallback. GitHub permanently signed releases require the correct password for the matching private keystore. **Do not commit the private signing kit.** Installing a different-signed APK over an existing install is blocked by Android. Export data and verify backups before changing signing identity.
+## Privacy
+
+Financial data lives in the app's WebView storage. `allowBackup` is false, so uninstalling or clearing storage deletes it unless a JSON or CSV copy exists. Do not upload a backup or the signing key to this repository.

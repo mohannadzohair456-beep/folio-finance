@@ -1,0 +1,112 @@
+name: Folio device upgrade
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/folio-device-upgrade.yml'
+      - '.github/scripts/folio_device_drive.py'
+  workflow_run:
+    workflows: ["Build Folio APK"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade-from-v0233:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the UI driver
+        uses: actions/checkout@v4
+      - name: Download v0.2.33 and the current signed release
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --output /tmp/folio-v0233.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/download/v0.2.33/app-release.apk
+          curl -fL --retry 3 --output /tmp/folio-current.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/latest/download/app-release.apk
+          python3 -c 'import pathlib,sys
+          for path in sys.argv[1:]:
+              data=pathlib.Path(path).read_bytes()
+              if data[:4]!=b"PK\x03\x04": raise SystemExit(path+" is not an apk")
+              print(path, len(data))' /tmp/folio-v0233.apk /tmp/folio-current.apk
+          sha256sum /tmp/folio-v0233.apk /tmp/folio-current.apk
+      - name: Install UI text tools
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - name: Prepare KVM
+        run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Enter data on v0.2.33, upgrade in place, read it back
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048
+          disable-animations: true
+          emulator-boot-timeout: 720
+          script: |
+            set -euo pipefail
+            python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" upgrade \
+              --old /tmp/folio-v0233.apk \
+              --new /tmp/folio-current.apk \
+              --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/upgrade-api34"
+      - name: Upload upgrade screenshots and UI dumps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-upgrade-api34
+          path: emulator-artifacts/upgrade-api34
+          if-no-files-found: warn
+          retention-days: 14
+
+  clean-launch:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [26, 35]
+    steps:
+      - name: Checkout the UI driver
+        uses: actions/checkout@v4
+      - name: Download the current signed release
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --output /tmp/folio-current.apk \
+            https://github.com/mohannadzohair456-beep/folio-finance/releases/latest/download/app-release.apk
+          python3 -c 'import pathlib,sys; data=pathlib.Path(sys.argv[1]).read_bytes();
+          assert data[:4]==b"PK\x03\x04", "not an apk"; print(len(data))' /tmp/folio-current.apk
+          sha256sum /tmp/folio-current.apk
+      - name: Install UI text tools
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - name: Prepare KVM
+        run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Clean install and launch on API ${{ matrix.api }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -euo pipefail
+            python3 "$GITHUB_WORKSPACE/.github/scripts/folio_device_drive.py" launch \
+              --apk /tmp/folio-current.apk \
+              --artifacts "$GITHUB_WORKSPACE/emulator-artifacts/launch-api${{ matrix.api }}"
+      - name: Upload launch screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-launch-api${{ matrix.api }}
+          path: emulator-artifacts/launch-api${{ matrix.api }}
+          if-no-files-found: warn
+          retention-days: 14
