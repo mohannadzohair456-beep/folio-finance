@@ -48,6 +48,10 @@ The schema 2 build of `dbb1895` published v0.3.50 and marked it latest before th
 
 Later main builds publish as prereleases and do not replace `releases/latest`. The device upgrade installs that tag. When the v0.2.33 path and the schema-1 path both pass, the workflow clears the prerelease flag and makes that tag latest. When either path fails, the workflow marks the tag as a prerelease and clears latest, so `releases/latest` stays on the last promoted release. The signing identity is unchanged. P0.3 is still a separate change.
 
+## Update — 12 Oct 2026, Ask Folio estimates
+
+Ask Folio no longer opens an affordability reply with Yes or No, and it no longer calls a locally reconciled figure a verified balance. A purchase is described as an estimated remaining amount from data the user entered, with an explicit line that the estimate is not approval and not a guarantee. Month-end projection says planned income is not money available now. A question in Arabic script, or in common Arabizi such as `a2dar ashtary`, is answered in Egyptian Arabic with Western digits. English questions stay in English. The numbers and the refusal to mix currencies are unchanged.
+
 ## Not done
 
 These three bullets described the tree at `f422d13`. The task board's 12 Oct 2026 baseline later records a signed v0.3.43 release. They are not the status of the payday runway change above.

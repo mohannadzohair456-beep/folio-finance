@@ -171,7 +171,8 @@ check('planCommand preserves the legacy action shape', () => {
   const afford = A.planCommand('Can I afford 3000?');
   assert.equal(afford.action, undefined);
   assert.equal(afford.needs_confirmation, false);
-  assert.match(afford.answer, /safe to spend|balance/i);
+  assert.match(afford.answer, /estimate|discretionary|balance/i);
+  assert.equal(/^yes\b/i.test(afford.answer), false);
   const goal = A.planCommand('I want to save 20k');
   assert.equal(goal.action, undefined);
   assert.equal(goal.proposal.type, 'savingsGoal');
@@ -245,7 +246,10 @@ check('can_afford is pure and refuses a different currency', () => {
   const yes = A.canAfford(ledger, { amount_minor: 50000, currency: 'EGP' });
   assert.equal(yes.affordable, true);
   assert.equal(yes.amount_minor, 10000);
-  assert.match(yes.explanation, /^Yes\./);
+  assert.match(yes.explanation, /not approval or a guarantee/);
+  assert.equal(/^yes\b/i.test(yes.explanation), false);
+  assert.match(yes.explanation, /EGP 500\.00/);
+  assert.match(yes.explanation, /EGP 100\.00/);
   const no = A.canAfford(ledger, 70000);
   assert.equal(no.affordable, false);
   assert.equal(no.amount_minor, -10000);
@@ -265,7 +269,9 @@ check('month-end projection keeps planned income apart from received income', ()
   assert.equal(projected.details.received_income_minor, 0);
   assert.deepEqual(projected.assumed, ['planned_income_still_expected', 'upcoming_bills', 'verified_balance']);
   assert.match(projected.explanation, /not yet received/);
+  assert.match(projected.explanation, /not money available now/);
   assert.match(projected.explanation, /Received income this month/);
+  assert.equal(/verified balance/i.test(projected.explanation), false);
   const paceState = Object.assign({}, ledger, { monthlyBudgetMinor: 0 });
   const pace = A.monthEndProjection(paceState);
   assert.equal(pace.amount_minor, 548333);
@@ -301,8 +307,10 @@ check('verified balance is not blended with the self-reported snapshot', () => {
   assert.equal(safe.balance_track, 'verified');
   assert.equal(safe.amount_minor, 30000);
   assert.equal(safe.details.cash_minor, 30000);
-  assert.match(safe.explanation, /verified balance only/);
+  assert.equal(/verified balance/i.test(safe.explanation), false);
+  assert.match(safe.explanation, /not a balance your bank confirmed/);
   assert.match(safe.explanation, /not added/);
+  assert.match(safe.explanation, /not a guarantee/i);
   assert.ok(safe.assumed.indexOf('verified_balance') < 0);
   assert.ok(safe.assumed.indexOf('monthly_budget') >= 0);
 });
@@ -414,7 +422,7 @@ check('payday runway flag stays off the existing safe-to-spend path', () => {
     emergencyReserveMinor: 0
   });
   assert.equal(A.safeToSpend(off).amount_minor, A.safeToSpend(ledger).amount_minor);
-  assert.match(A.canAfford(off, { amount_minor: 50000, currency: 'EGP' }).explanation, /^Yes\./);
+  assert.match(A.canAfford(off, { amount_minor: 50000, currency: 'EGP' }).explanation, /not approval or a guarantee/);
 });
 
 check('payday runway flag explains can_afford and safe_to_spend with numbers', () => {
@@ -478,7 +486,8 @@ check('payday runway flag explains can_afford and safe_to_spend with numbers', (
   const no = A.canAfford(state, { amount_minor: 20000, currency: 'EGP' });
   assert.equal(no.affordable, false);
   assert.match(no.explanation, /EGP 200\.00/);
-  assert.match(no.explanation, /exceeds/);
+  assert.match(no.explanation, /not approval or a guarantee/);
+  assert.equal(/^no\b/i.test(no.explanation), false);
   const missing = Object.assign({}, state);
   delete missing.paydayDate;
   const blocked = A.canAfford(missing, { amount_minor: 5000, currency: 'EGP' });
@@ -524,5 +533,36 @@ function freeze(value) {
   Object.freeze(value);
   for (const key of Object.keys(value)) freeze(value[key]);
 }
+
+check('Arabic and Arabizi questions get an Egyptian Arabic estimate, not approval', () => {
+  const state = {
+    currency: 'EGP', now: now, timeZone: '+00:00',
+    reportedBalanceMinor: 200000, balanceReportedAt: Date.UTC(2026, 9, 1),
+    upcomingBills: [], emergencyReserveMinor: 0, transactions: []
+  };
+  const arabic = A.planCommand('اقدر اشتري 300 جنيه؟', state);
+  assert.equal(arabic.intent, 'can_afford');
+  assert.equal(arabic.amount_minor, 30000);
+  assert.match(arabic.answer, /جنيه/);
+  assert.match(arabic.answer, /مش موافقة/);
+  assert.equal(/اصرف براحتك|أكيد تقدر/.test(arabic.answer), false);
+  const arabizi = A.planCommand('a2dar ashtary 300 geneh', state);
+  assert.equal(arabizi.intent, 'can_afford');
+  assert.equal(arabizi.amount_minor, 30000);
+  assert.match(arabizi.answer, /جنيه/);
+  assert.match(arabizi.answer, /مش موافقة/);
+  const spend = A.planCommand('a2dar asrof kam', state);
+  assert.equal(spend.intent, 'safe_to_spend');
+  assert.match(spend.answer, /تقديري/);
+  assert.equal(/verified balance/i.test(spend.answer), false);
+  const english = A.planCommand('Can I afford 300?', state);
+  assert.equal(english.intent, 'can_afford');
+  assert.match(english.answer, /not approval or a guarantee/);
+  assert.equal(/[\u0600-\u06FF]/.test(english.answer), false);
+  const balance = A.planCommand('el rasid 1500 geneh', state);
+  assert.equal(balance.intent, 'set_balance');
+  assert.match(balance.answer, /جنيه/);
+  assert.equal(/verified balance/i.test(balance.answer), false);
+});
 
 console.log('PASS Ask Folio assistant engine (' + passed + ' checks, ' + cases.length + ' parse cases)');

@@ -13,7 +13,8 @@
 | FOL-113 | P0 | Cursor | Publish main builds as prereleases and promote them to latest only after both device upgrade paths pass | A failed v0.2.33 or schema-1 upgrade marks that tag as a prerelease and leaves releases/latest on the last promoted release. No signing changes. | IN REVIEW: https://github.com/mohannadzohair456-beep/folio-finance/pull/15. v0.3.50 already passed its upgrade, so it stays latest. |
 | FOL-107 | P1 | Grok | Adversarial compare ChatGPT financial engine against Cursor implementation | Documented disagreements, fixes and evidence | DEPENDS FOL-105/106 |
 | FOL-108 | P1 | Cursor | Measure launch latency, JavaScript event/render bottlenecks and test Android 8/14/15 upgrade | Baseline vs after with reproducible runs | TODO |
-| FOL-109 | P1 | ChatGPT | Egyptian Arabic assistant copy + failure/uncertainty microcopy | Reviewed messages, RTL UI and deterministic tests | TODO |
+| FOL-109 | P1 | ChatGPT | Egyptian Arabic assistant copy + failure/uncertainty microcopy | Reviewed messages, RTL UI and deterministic tests | IN REVIEW with FOL-114. Section 4 wording is in the assistant replies. |
+| FOL-114 | P0 | Cursor | Ask Folio replies are estimates from user-entered data, in Egyptian Arabic when the question is Arabic or Arabizi | No approval wording, no verified-balance label, numeric explanation kept, tests green | IN REVIEW. P0.3 is a separate change. |
 | FOL-110 | P0 | Grok | Release readiness, staged smoke test on owner phone | Physical-device checklist and honest limitations | BLOCKED: owner |
 | FOL-111 | P2 | Grok | Identify one under-tested competitive assumption and ask ChatGPT to challenge it | Research result pasted into shared handoff or committed; actionable decision | TODO |
 
