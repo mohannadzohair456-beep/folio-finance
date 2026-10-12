@@ -17,6 +17,17 @@ PKG = "com.folio.finance.app"
 ACTIVITY = PKG + "/com.folio.finance.MainActivity"
 
 
+def normalized_label(text):
+    cleaned = " ".join(str(text).split()).lower()
+    cleaned = cleaned.replace("→", " ").replace("›", " ").replace("»", " ")
+    return " ".join(cleaned.split()).strip(" .:-")
+
+
+def is_control_label(text, needle):
+    """True when the node is the control, not a sentence that mentions it."""
+    return normalized_label(text) == normalized_label(needle)
+
+
 class DriveError(Exception):
     pass
 
@@ -200,7 +211,16 @@ class Driver:
         self.shell(f"input swipe {x} {int(self.height * 0.72)} {x} {int(self.height * 0.28)} 350")
         time.sleep(0.6)
 
+    def scroll_to_top(self):
+        x = self.width // 2
+        top = int(self.height * 0.28)
+        bottom = int(self.height * 0.78)
+        for _ in range(3):
+            self.shell(f"input swipe {x} {top} {x} {bottom} 250")
+            time.sleep(0.35)
+
     def collect(self, scrolls=3):
+        self.scroll_to_top()
         pieces = []
         for _ in range(scrolls + 1):
             pieces.append(self.blob(self.look()))
@@ -240,6 +260,37 @@ class Driver:
                 return True
             self.swipe_up()
         return False
+
+    def tap_control(self, needle, scrolls=2):
+        """Tap a button whose label is the needle, not a sentence that contains it."""
+        for i in range(scrolls + 1):
+            nodes = self.look(needle)
+            found = [
+                node for node in nodes
+                if self.visible(node) and is_control_label(node["text"], needle)
+            ]
+            if found:
+                found.sort(key=lambda node: (
+                    node["class"].startswith("ocr"),
+                    not node["clickable"],
+                    -node["cy"],
+                ))
+                self.tap_node(found[0])
+                return True
+            loose = [node["text"] for node in nodes if needle.lower() in node["text"].lower()]
+            print("no control label", needle, "loose", loose[:8], flush=True)
+            if i < scrolls:
+                self.swipe_up()
+        return False
+
+    def hide_keyboard(self):
+        result = self.shell("dumpsys input_method", check=False, timeout=25)
+        text = result.stdout or ""
+        if "mInputShown=true" not in text:
+            return
+        print("hiding keyboard", flush=True)
+        self.shell("input keyevent KEYCODE_BACK", check=False)
+        time.sleep(0.5)
 
     def wait_for(self, needle, timeout=45, forbid=()):
         deadline = time.time() + timeout
@@ -373,38 +424,43 @@ def upgrade(driver, old_apk, new_apk):
         raise DriveError("could not open Folio")
     driver.wait_for("Your money", timeout=25)
 
-    if not driver.tap_text("Add transaction", scrolls=2):
-        raise DriveError("could not open the transaction form")
+    driver.scroll_to_top()
+    time.sleep(0.4)
+    if not driver.tap_control("Add transaction", scrolls=0):
+        driver.scroll_to_top()
+        if not driver.tap_control("Add transaction", scrolls=0):
+            raise DriveError("could not open the transaction form")
     driver.wait_for("New transaction", timeout=15)
-    driver.type_text("Carrefour")
+    driver.fill_labeled("Merchant or source", "Carrefour")
+    driver.hide_keyboard()
     driver.fill_labeled("Amount", "125.50", numeric=True)
-    nodes = driver.nodes()
-    submits = [node for node in driver.candidates(nodes, "Add transaction") if driver.visible(node)]
-    if not submits:
-        raise DriveError("could not find the Add transaction button")
-    submits.sort(key=lambda node: node["cy"])
-    driver.tap_node(submits[-1])
+    driver.hide_keyboard()
+    if not driver.tap_control("Add transaction", scrolls=0):
+        driver.hide_keyboard()
+        if not driver.tap_control("Add transaction", scrolls=1):
+            raise DriveError("could not find the Add transaction button")
     driver.wait_for("Carrefour", timeout=20)
 
-    if not (driver.tap_text("Budgets", scrolls=1) or driver.tap_text("Budget", scrolls=1)):
+    if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not open Budgets")
     driver.wait_for("Set a budget", timeout=20)
-    if not driver.tap_text("Set a budget", scrolls=2):
+    if not driver.tap_control("Set a budget", scrolls=2):
         raise DriveError("could not open the budget form")
     driver.wait_for("Monthly limit", timeout=15)
     driver.fill_labeled("Monthly limit", "3500", numeric=True)
-    if not driver.tap_text("Save budget", scrolls=2):
+    driver.hide_keyboard()
+    if not driver.tap_control("Save budget", scrolls=2):
         raise DriveError("could not save the budget")
     driver.wait_for("Food", timeout=20)
 
     before_home = ""
-    if driver.tap_text("Home", scrolls=1) or driver.tap_text("Overview", scrolls=1):
+    if driver.tap_control("Home", scrolls=1) or driver.tap_control("Overview", scrolls=1):
         time.sleep(1)
     before_home = driver.collect(scrolls=3)
     driver.save_text("before-home.txt", before_home)
     balance_ok = ("8,295", "8,420.50", "8,420.5")
     driver.require(before_home, ["Carrefour", "125.50", balance_ok, "9,000"], "before-upgrade overview")
-    if not (driver.tap_text("Budgets", scrolls=1) or driver.tap_text("Budget", scrolls=1)):
+    if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not return to Budgets")
     time.sleep(1)
     before_budget = driver.collect(scrolls=2)
@@ -427,7 +483,7 @@ def upgrade(driver, old_apk, new_apk):
     if "Meet Folio" in after_home and "Carrefour" not in after_home:
         raise DriveError("upgrade returned to onboarding and the entered records are not on screen")
     driver.require(after_home, ["Carrefour", "125.50", balance_ok, "9,000"], "after-upgrade overview")
-    if not (driver.tap_text("Budgets", scrolls=1) or driver.tap_text("Budget", scrolls=1)):
+    if not (driver.tap_control("Budgets", scrolls=1) or driver.tap_control("Budget", scrolls=1)):
         raise DriveError("could not open Budgets after upgrade")
     time.sleep(1)
     after_budget = driver.collect(scrolls=2)
