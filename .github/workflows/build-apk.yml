@@ -7,6 +7,11 @@ on:
       - 'android/**'
       - 'tests/**'
       - '.github/workflows/build-apk.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'tests/**'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
 permissions:
@@ -34,16 +39,26 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Test transaction parser
+      - name: Test transaction parser and duplicate detection
         run: |
           mkdir -p /tmp/folio-parser-tests
-          javac -d /tmp/folio-parser-tests android/app/src/main/java/com/folio/finance/TransactionParser.java tests/ParserTest.java
+          javac --release 17 -d /tmp/folio-parser-tests \
+            android/app/src/main/java/com/folio/finance/TransactionParser.java \
+            android/app/src/main/java/com/folio/finance/IngestionDedup.java \
+            tests/ParserTest.java tests/DedupTest.java
           java -cp /tmp/folio-parser-tests ParserTest
+          java -cp /tmp/folio-parser-tests DedupTest
       - name: Test interface
         run: node tests/ui.test.cjs
       - name: Test onboarding and Folio assistant
         run: node tests/v2.test.cjs
+      - name: Test money, migration, backup and legacy CSV
+        run: node tests/money.test.cjs
+      - name: Compile release without signing secrets
+        if: github.event_name == 'pull_request'
+        run: chmod +x android/gradlew && android/gradlew -p android assembleRelease --no-daemon
       - name: Verify permanent signing identity
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           KEY_B64: ${{ secrets.FOLIO_KEYSTORE_B64 }}
@@ -68,13 +83,15 @@ jobs:
           fi
           echo "Folio permanent certificate verified: $FOUND_CERT"
       - name: Build permanently signed release
+        if: github.event_name != 'pull_request'
         env:
           FOLIO_SIGNING_STORE_FILE: ${{ runner.temp }}/folio-release.p12
           FOLIO_SIGNING_PASSWORD: ${{ secrets.FOLIO_SIGNING_PASSWORD }}
           FOLIO_VERSION_CODE: ${{ github.run_number }}
-          FOLIO_VERSION_NAME: 0.2.${{ github.run_number }}
-        run: gradle -p android assembleRelease --no-daemon
+          FOLIO_VERSION_NAME: 0.3.${{ github.run_number }}
+        run: chmod +x android/gradlew && android/gradlew -p android assembleRelease --no-daemon
       - name: Verify signed APK integrity and compatibility
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -84,6 +101,13 @@ jobs:
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
           "$TOOLS/aapt" dump badging "$APK" | tee /tmp/folio-apk-badging.txt
           "$TOOLS/zipalign" -c -v 4 "$APK"
+          "$TOOLS/zipalign" -c -p 4 "$APK"
+          SCHEME=$("$TOOLS/apksigner" verify --verbose --min-sdk-version 26 "$APK")
+          printf '%s\n' "$SCHEME"
+          printf '%s\n' "$SCHEME" | grep -q "Verified using v1 scheme (JAR signing): true"
+          printf '%s\n' "$SCHEME" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
+          printf '%s\n' "$SCHEME" | grep -q "Verified using v3 scheme (APK Signature Scheme v3): true"
+          unzip -v "$APK" | awk '/resources\.arsc$/ { if ($0 !~ /Stored/) { print "resources.arsc must be stored uncompressed"; exit 1 } }'
           sha256sum "$APK"
           unzip -t "$APK" | tail -n 2
           grep -q "package: name='com.folio.finance.app'" /tmp/folio-apk-badging.txt
@@ -94,6 +118,7 @@ jobs:
             exit 1
           fi
       - name: Upload permanent signed APK
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: Folio-Updateable-Signed-APK
@@ -101,10 +126,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Publish permanent release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.${{ github.run_number }}
-          name: Folio v0.2.${{ github.run_number }}
+          tag_name: v0.3.${{ github.run_number }}
+          name: Folio v0.3.${{ github.run_number }}
           make_latest: true
           generate_release_notes: true
           files: android/app/build/outputs/apk/release/app-release.apk

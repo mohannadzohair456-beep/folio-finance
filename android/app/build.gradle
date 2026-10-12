@@ -4,13 +4,25 @@ android {
     namespace 'com.folio.finance'
     compileSdk 35
 
+    // v0.2.1–v0.2.33 published versionCode == GitHub run_number, and 33 is the highest released.
+    // 100 + runNumber stays above that floor for CI and for a local build (runNumber 0 → 100).
+    def runNumber = 0
+    try {
+        def raw = System.getenv('FOLIO_VERSION_CODE')
+        if (raw != null && !raw.trim().isEmpty()) runNumber = Integer.parseInt(raw.trim())
+    } catch (Exception ignored) {
+        runNumber = 0
+    }
+    if (runNumber < 0) runNumber = 0
+    def folioVersionCode = 100 + runNumber
+
     defaultConfig {
         // Permanent user-facing package. Legacy com.folio.finance debug versions can coexist for safe CSV migration.
         applicationId 'com.folio.finance.app'
         minSdk 26
         targetSdk 35
-        versionCode Integer.parseInt(System.getenv('FOLIO_VERSION_CODE') ?: '1')
-        versionName System.getenv('FOLIO_VERSION_NAME') ?: '0.1.0'
+        versionCode folioVersionCode
+        versionName System.getenv('FOLIO_VERSION_NAME') ?: "0.3.${folioVersionCode}"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -26,6 +38,12 @@ android {
                 storePassword signingPassword
                 keyAlias 'folio'
                 keyPassword signingPassword
+                // v0.2.33 was v2-only. v1 helps OEM package installers that reject v2-only APKs
+                // ("problem parsing the package") while emulators accept them. v3 is the same certificate, no rotation.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = false
             }
         }
         buildTypes { release { signingConfig signingConfigs.release } }

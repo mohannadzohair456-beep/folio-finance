@@ -52,4 +52,4 @@ jobs:
             adb shell am start -n com.folio.finance.app/com.folio.finance.MainActivity
             sleep 8
             adb shell pidof com.folio.finance.app
-            echo "SUCCESS: Both old Folio and permanently signed Folio New are installed at once."
+            echo "SUCCESS: Both old Folio and permanently signed Folio are installed at once."
