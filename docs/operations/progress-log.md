@@ -88,6 +88,35 @@ Local node suites passed on `9f06f13` before the merge: Chrome 69 syntax, money 
 
 The device upgrade of that tag did not promote it: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38260676035. `upgrade-from-schema1` printed `UPGRADE_DATA_SURVIVED 0.3.66 166`. `upgrade-from-v0233` on API 34 printed the same. API 35 failed while entering data on the old v0.2.33 page: the Continue control stayed clipped at y=1897 and the driver printed `FAILED could not leave the balance step`. `clean-launch` on API 26 and API 35 passed. `promote-release` was skipped. `withhold-latest-on-failure` printed `v0.3.66 prerelease=true releases/latest=v0.3.63`. v0.3.66 stays a prerelease. `releases/latest` stays v0.3.63. That API 35 driver miss on the old balance step is the same flake already owned by a separate `.github` change. This merge does not change workflows or signing.
 
+## Update — 12 Oct 2026, notification amount, auto-confirm, and voice (FOL-117)
+
+Reported on a real phone after v0.3.71. This change is not that install.
+
+The parser takes the transaction amount. A message that says a 5 EGP payment and a 5,010 EGP balance records 500 minor units, not 501000. Arabic and English balance words and transaction words are both recognized, including Arabic-Indic digits. If two amounts stay ambiguous, confidence is low and the row is not auto-confirmed. A stated balance can be stored in `balanceObservations` with a timestamp. It is not a transaction and it does not replace `reportedBalanceMinor` or an account balance. New bank shapes go in `TransactionParser.EXTENSION_TEMPLATES`. The owner's redacted SMS is not in the suite. The Egyptian bank cases are synthetic and labeled.
+
+A new high-confidence alert from a recognized parse, with one clear direction and one clear transaction amount, and not a duplicate candidate, is saved as confirmed and counts immediately. Low confidence, an ambiguous amount, and a possible duplicate stay on the review list. Settings has "Always review notifications", off by default, and it applies only to new alerts. Undo, Edit, and Reject stay on an auto-confirmed row. Undo rejects the row and keeps it. Migration does not rewrite a stored `suggested` status. Schema stays 2.
+
+Voice requests `RECORD_AUDIO` at runtime and uses `SpeechRecognizer` with `EXTRA_PREFER_OFFLINE` for `ar-EG` and `en-US`. If offline recognition cannot run, the page shows "Offline speech pack not installed: install Arabic/English offline speech in Google settings." and the Arabic line. The system speech screen is a separate button. It runs outside Folio, so that other app may use the network. Folio still has no `INTERNET` permission. A transcript is still a draft until confirm. See `docs/architecture/voice-privacy.md`.
+
+`applicationId` stays `com.folio.finance.app`. The signing pin is unchanged.
+
+Local commands that passed before the pull request, on this branch, Linux, Node v22.14.0, `javac --release 17`:
+
+| Command | Result |
+| --- | --- |
+| `ParserTest` | PASS 67 parser cases |
+| `DedupTest` | PASS 13 dedup cases |
+| `node tests/chrome69-syntax.cjs` | PASS |
+| `node tests/flow.test.cjs` | PASS |
+| `node tests/ui.test.cjs` (includes `boot.test.cjs`) | PASS |
+| `node tests/v2.test.cjs` | PASS |
+| `node tests/money.test.cjs` | PASS |
+| `node tests/assistant.test.cjs` | PASS 106 checks, 84 parse cases |
+| `node tests/payday-runway.test.cjs` | PASS 76 checks |
+| `node tests/upgrade-boot.test.cjs` | PASS |
+
+Pull-request CI has not run for this commit yet. No tag has been published for it. The device-upgrade gate has not printed `UPGRADE_DATA_SURVIVED` for this change. It was not installed on a physical phone. SpeechRecognizer, the runtime permission dialog, the offline pack message on that phone, and the system speech screen were not exercised on hardware. `MainActivity` was not compiled here because this workspace has no Android SDK.
+
 ## Not done
 
 These three bullets described the tree at `f422d13`. The task board's 12 Oct 2026 baseline later records a signed v0.3.43 release. They are not the status of the payday runway change above.

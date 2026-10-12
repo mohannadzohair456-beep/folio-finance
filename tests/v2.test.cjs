@@ -67,6 +67,13 @@ assert.ok(voiceHtml.includes('REVIEW BEFORE SAVING'),'a spoken expense is shown 
 assert.ok(voiceHtml.includes('Record expense'),'the spoken draft uses the existing assistant action');
 assert.equal(JSON.parse(storage.get('folio_finance_v1')).transactions.length,beforeVoice,'the spoken draft is not saved until confirmed');
 assert.ok(context.window.FolioV2.voiceNetworkNotice().includes('may still send audio to its provider over the network'),'the voice notice names the network risk');
+assert.ok(context.window.FolioV2.voiceNetworkNotice().includes('prefer offline recognition'),'the voice notice prefers offline recognition');
+vm.runInContext("FolioV2.onVoiceResult('','OFFLINE_PACK\\nOffline speech pack not installed: install Arabic/English offline speech in Google settings.')",context);
+assert.equal(JSON.parse(storage.get('folio_finance_v1')).transactions.length,beforeVoice,'an offline-pack error saves nothing');
+const packHtml=doc.getElementById('root').innerHTML;
+assert.ok(packHtml.includes('Offline speech pack not installed: install Arabic/English offline speech in Google settings.'),'the offline-pack sentence is shown');
+assert.ok(packHtml.includes('Open system speech screen'),'the system speech screen is offered');
+assert.equal(typeof context.window.FolioV2.beginSystemVoice,'function');
 assert.ok(!html.includes('demoNotice()}'+ '$'+'{trackingPanel()}<div class="metrics">'),'Tracking diagnostics removed from home');
 const gradle=fs.readFileSync('android/app/build.gradle','utf8');
 const manifest=fs.readFileSync('android/app/src/main/AndroidManifest.xml','utf8');

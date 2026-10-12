@@ -14,7 +14,11 @@ Folio keeps the books on the device. The WebView page is still loaded from `file
 
 A category budget of 3500 EGP in schema 0 becomes `350000`. A later launch sees `schemaVersion` of 1 or 2 and leaves `350000` alone.
 
-Schema 2 adds `status` on every transaction: `suggested`, `confirmed`, `rejected`, or `duplicate-candidate`. A row that already has one of those values keeps it. A notification with `review: true` and no status becomes `suggested`. Every other existing row becomes `confirmed`. Rejected, suggested, and duplicate-candidate rows stay in the workspace and stay out of monthly totals until a person confirms them. Confirm, reject, and edit are on the existing auto-detected review row.
+Schema 2 adds `status` on every transaction: `suggested`, `confirmed`, `rejected`, or `duplicate-candidate`. A row that already has one of those values keeps it. A notification with `review: true` and no status becomes `suggested`. Every other existing row becomes `confirmed`. Rejected, suggested, and duplicate-candidate rows stay in the workspace and stay out of monthly totals until a person confirms them. Confirm, reject, and edit are on the existing auto-detected review row. Opening the app does not change a stored status. A suggested row that was already saved stays suggested.
+
+A new notification is different from a stored row. `FolioData.notificationIntake` confirms it only when the parser confidence is `high`, the amount is not ambiguous, it is not a possible duplicate, and `alwaysReviewNotifications` is not true. That row is stored as `confirmed` with `autoConfirmed: true` and counts in totals immediately. The transaction row offers Undo, Edit, and Reject. Undo sets the status to `rejected` and keeps the row. A low-confidence parse, an ambiguous amount, a missing confidence (an item already queued before this build), or the always-review setting stays `suggested`. `alwaysReviewNotifications` defaults to false and applies only to new intake.
+
+`balanceObservations` is an optional list on the same schema, capped at 30. A bank message can note the balance it stated, with `observedAt`, currency, `source: notification`, and `provenance: notification`. That note is not a transaction and it does not change `reportedBalanceMinor`, `balanceReportedAt`, or an account balance. The confirmed-balance freshness rules are unchanged.
 
 `accounts` is an optional list on the same schema. Each account stores a user-confirmed `balanceMinor`, `asOf`, `currency`, `type` (`cash`, `bank`, `wallet`, `prepaid`, or `credit`), and `untracked`. Provenance is `manual` or `csv`. A notification is never stored as the source of a balance, and notification rows do not change `balanceMinor` or `reportedBalanceMinor`. Freshness is `fresh` when `asOf` is within 7 days, `stale` when it is older, and `unknown` when the amount or the time is missing. A CSV import adds transactions only.
 
@@ -75,6 +79,14 @@ An invalid currency or amount rejects the whole file and leaves the saved worksp
 1. Identical normalized text (SHA-256) seen in the last 24 hours is one event. Normalization is NFKC, Arabic-Indic digits folded to ASCII, case folded, and whitespace collapsed. This catches the same SMS from Messages and from the bank app, and a notification Android reposts later.
 2. The same amount, currency, direction, and compatible merchant within 90 seconds is one event, unless both messages contain a reference and the references differ. Merchants are compatible when they are equal, one contains the other, or either label is the generic `Card payment` or `Incoming transfer`.
 3. The same amount at the same merchant more than 90 seconds later is kept when the text differs. A bank that repeats an alert with no timestamp and no reference can still be collapsed for 24 hours by rule 1. That tradeoff is intentional so a repost is not booked twice.
+
+After a row is queued, the page applies a softer check. The same amount, currency, direction, and a loosely matching merchant within 24 hours, against a row that is not rejected, is saved as `duplicate-candidate` instead of being confirmed. The generic labels `Card payment` and `Incoming transfer` do not count as the same merchant. That check does not drop the row.
+
+## Notification amounts
+
+`TransactionParser` chooses the transaction amount, not the balance. Balance words include Arabic `رصيدك`, `الرصيد`, `المتاح`, `الرصيد المتبقي`, and `متبقي`, and English `available balance`, `balance`, `Avl Bal`, and `remaining`. Transaction words include `تم خصم`, `خصم`, `سحب`, `شراء`, `دفع`, `تم تحويل`, `إيداع`, and `اضافة`, and English `debited`, `withdrawn`, `purchase`, `paid`, `spent`, `credited`, and `received`. Digits may be Arabic-Indic. Thousands separators and `EGP`, `جنيه`, `ج.م`, and `LE` are accepted.
+
+The extension point is `EXTENSION_TEMPLATES` in `TransactionParser.java`. Each template names the transaction amount and the stated balance. Add a template when a redacted bank message has a shape the current templates miss. If two amounts remain and neither is clearly the transaction, the parse is low confidence and `ambiguous`, and the page does not auto-confirm it. A balance-only message is not a transaction. The stated balance, when present, is the optional observation above.
 
 The id is `fp-` plus 32 hex characters of `SHA-256(semanticKey + "|" + contentHash)`. The same text therefore has the same id even if the native memory was cleared, and the page drops a second copy with that id. Memory is capped at 200 entries.
 

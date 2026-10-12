@@ -2,7 +2,7 @@
   'use strict';
   const $=id=>document.getElementById(id);
   const money=n=>fmt(Number(n)||0,state.currency);
-  let stage=0, draft=null, dialogue=[], voiceLocale='en-US', showPrivacySheet=false, captureConsent=false;
+  let stage=0, draft=null, dialogue=[], voiceLocale='en-US', showPrivacySheet=false, captureConsent=false, voiceSystemOffer=false;
   const amountText=n=>new Intl.NumberFormat('en-US',{maximumFractionDigits:2}).format(n);
   function numberValue(s){
     if(!s)return null;
@@ -39,6 +39,11 @@
     if(fresh==='fresh')label='Entered balance is current';
     if(fresh==='stale')label='Entered balance is stale';
     let text=label+'.'+(moved?' Untracked movements are not in this figure.':'')+' Not a bank balance.';
+    const observations=Array.isArray(state.balanceObservations)?state.balanceObservations:[];
+    const latest=observations.length?observations[observations.length-1]:null;
+    if(latest&&latest.currency===state.currency&&Number.isFinite(Number(latest.amountMinor))){
+      text+=' A bank message stated '+money(latest.amountMinor)+'. That note is not your confirmed balance.';
+    }
     const accounts=Array.isArray(state.accounts)?state.accounts:[];
     for(let i=0;i<accounts.length;i++){
       const account=accounts[i];
@@ -184,8 +189,17 @@
   function voiceNetworkNotice(){
     return "Folio asks Android to prefer offline recognition. This app has no internet permission and does not send audio anywhere. If this phone has no offline speech pack, the device's own recognizer may still send audio to its provider over the network. You will see a draft and nothing is saved until you confirm.";
   }
+  function voiceErrorText(error){
+    const raw=String(error==null?'':error);
+    const prefixes=['OFFLINE_PACK','NO_RECOGNIZER','MIC_DENIED'];
+    for(let i=0;i<prefixes.length;i++){
+      if(raw.indexOf(prefixes[i])===0)return raw.slice(prefixes[i].length).replace(/^\s+/,'');
+    }
+    return raw;
+  }
   function beginVoice(){
     showPrivacySheet=false;
+    voiceSystemOffer=false;
     render();
     if(!native()||typeof FolioNative.startVoiceRecognition!=='function'){
       const note='Voice input requires the installed Android app and a compatible speech recognition provider. You can type instead. Nothing was saved.';
@@ -194,6 +208,8 @@
       render();
       return;
     }
+    message('Listening. Speak in '+(voiceLocale==='ar-EG'?'Arabic':'English')+'. Nothing is saved until you confirm.');
+    render();
     try{FolioNative.startVoiceRecognition(voiceLocale);}
     catch(e){
       const note='Speech recognition is unavailable. Please type your request. Nothing was saved.';
@@ -202,14 +218,37 @@
       render();
     }
   }
-  function onVoiceResult(text,error){
-    ensureDeferredEngines();
-    if(error){
-      message(error);
-      if(typeof notify==='function')notify(error);
+  function beginSystemVoice(){
+    voiceSystemOffer=false;
+    if(!native()||typeof FolioNative.startSystemVoiceRecognition!=='function'){
+      const note='The system speech screen is unavailable in this preview. You can type instead. Nothing was saved.';
+      message(note);
+      if(typeof notify==='function')notify(note);
       render();
       return;
     }
+    message('Opening the system speech screen. That screen runs in another app and may send audio to its provider. Nothing is saved until you confirm.');
+    render();
+    try{FolioNative.startSystemVoiceRecognition(voiceLocale);}
+    catch(e){
+      const note='The system speech screen could not open. Please type your request. Nothing was saved.';
+      message(note);
+      if(typeof notify==='function')notify(note);
+      render();
+    }
+  }
+  function onVoiceResult(text,error){
+    ensureDeferredEngines();
+    if(error){
+      const raw=String(error);
+      voiceSystemOffer=raw.indexOf('OFFLINE_PACK')===0||raw.indexOf('NO_RECOGNIZER')===0;
+      const note=voiceErrorText(raw);
+      message(note);
+      if(typeof notify==='function')notify(note);
+      render();
+      return;
+    }
+    voiceSystemOffer=false;
     const plan=function(spoken){return window.FolioAssistant?FolioAssistant.planCommand(spoken,assistantLedger()):planCommand(spoken);};
     const accepted=window.FolioFlow&&typeof FolioFlow.acceptVoiceTranscript==='function'?FolioFlow.acceptVoiceTranscript(text,plan):null;
     if(!accepted||!accepted.ok){render();return;}
@@ -290,6 +329,7 @@
     return `${heading('FINANCIAL COMPANION','Ask Folio','Simple, transparent planning. You approve every change to your records.')}
       <div class="v2-assistant">${snapshots}
       <div class="v2-chat-shell">${chat}
+      ${voiceSystemOffer?`<div class="v2-action-review"><span>OFFLINE SPEECH</span><strong>Offline speech pack not installed: install Arabic/English offline speech in Google settings.</strong><p>حزمة النطق بدون إنترنت غير مثبّتة: ثبّت العربية والإنجليزية من إعدادات Google.</p><button type="button" class="v2-next" onclick="FolioV2.beginSystemVoice()">Open system speech screen</button></div>`:''}
       ${draft?`<div class="v2-action-review"><span>REVIEW BEFORE SAVING</span><strong>${h(draft.title)}</strong><div class="v2-action-line"><button onclick="FolioV2.cancelDraft()" class="v2-outline">Cancel</button><button onclick="FolioV2.applyDraft()" class="v2-next">Confirm & save</button></div></div>`:''}
       <div class="v2-compose"><textarea id="folio-assistant-input" rows="2" maxlength="500" placeholder="Ask about your money, or record a transaction..." aria-label="Message Folio"></textarea><div class="v2-compose-bottom"><div><button class="v2-mic" onclick="FolioV2.requestVoice()" title="Voice entry" aria-label="Voice entry">Voice entry</button><button class="v2-locale ${voiceLocale==='en-US'?'sel':''}" onclick="FolioV2.chooseLocale('en-US')">EN</button><button class="v2-locale ${voiceLocale==='ar-EG'?'sel':''}" onclick="FolioV2.chooseLocale('ar-EG')">AR</button></div><button class="v2-next" onclick="FolioV2.submitText()">Send ↗</button></div></div></div>
       <div class="v2-example-row"><button onclick="FolioV2.sendExample('I have 20000 in my bank')">Set my balance</button><button onclick="FolioV2.sendExample('My monthly budget is 5000')">Set a budget</button><button onclick="FolioV2.sendExample('How am I doing?')">Monthly overview</button><button onclick="FolioV2.sendExample('Can I afford 1500?')">Can I afford it?</button></div>
@@ -317,7 +357,7 @@
   state.monthlyIncomeMinor=Number(state.monthlyIncomeMinor)||0;
   if(!Number.isFinite(state.reportedBalanceMinor))state.reportedBalanceMinor=null;
   if(!Number.isFinite(state.balanceReportedAt))state.balanceReportedAt=null;
-  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,enteredBalanceNote,financeSummary,voiceNetworkNotice};
+  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,beginSystemVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,enteredBalanceNote,financeSummary,voiceNetworkNotice};
   window.folioGoHome=()=>{if(!state.v2Onboarded){previousStep();return;}onNav('overview');};
   if(state.v2Onboarded && page==='overview' && typeof requestAnimationFrame==='function' && typeof folioAfterPaint==='function'){
     if(!window.folioBootPainted && typeof paintLedgerShell==='function') paintLedgerShell();

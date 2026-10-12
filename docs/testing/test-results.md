@@ -110,6 +110,30 @@ The public asset `https://github.com/mohannadzohair456-beep/folio-finance/releas
 
 `apksigner` was not run locally because the Android build-tools are not installed.
 
+## FOL-117 local re-run — 12 Oct 2026
+
+Same machine notes as the top of this file: Node v22.14.0, `javac --release 17`. No Android SDK, so `MainActivity` and `assembleRelease` were not run locally.
+
+| Command | Result |
+| --- | --- |
+| `ParserTest` | PASS 67 parser cases |
+| `DedupTest` | PASS 13 dedup cases |
+| `node tests/chrome69-syntax.cjs` | PASS Chrome 69 syntax and offline voice checks (9 scripts) |
+| `node tests/flow.test.cjs` | PASS money flow, quick add, and voice drafts |
+| `node tests/ui.test.cjs` | PASS bundled interface and tracking setup checks |
+| `node tests/boot.test.cjs` | PASS boot shell before ledger, Ask Folio, and payday (also required by `ui.test.cjs`) |
+| `node tests/v2.test.cjs` | PASS Folio onboarding + assistant smoke tests |
+| `node tests/money.test.cjs` | PASS money, migration, backup and legacy CSV checks |
+| `node tests/assistant.test.cjs` | PASS Ask Folio assistant engine (106 checks, 84 parse cases) |
+| `node tests/payday-runway.test.cjs` | PASS payday runway (76 checks) |
+| `node tests/upgrade-boot.test.cjs` | PASS upgrade boot keeps a stored ledger off onboarding |
+
+The parser cases include the shape "paid 5, balance 5,010" in English and Arabic, Arabic-Indic digits, and synthetic lines labeled as CIB, NBE, Banque Misr, QNB, InstaPay, Vodafone Cash, and Telda. They are not a redacted SMS from the owner's phone.
+
+`money.test.cjs` checks high-confidence intake becomes confirmed, low or missing confidence and an ambiguous amount stay suggested, always-review forces suggested, a same-merchant match within 24 hours is a duplicate candidate, a generic card payment is not, a stated balance does not change `reportedBalanceMinor`, and a stored suggested row stays suggested. `ui.test.cjs` feeds `refreshNative` the same rules and checks Undo drops the auto-confirmed amount from the month total. `v2.test.cjs` checks an `OFFLINE_PACK` error saves nothing and shows the offline-pack sentence plus "Open system speech screen".
+
+Not verified here: pull-request CI, a signed APK, the device-upgrade gate, or a physical phone.
+
 ## Emulator
 
 ### In-place upgrade — not executed

@@ -448,4 +448,66 @@ assert.equal(accountRoundTrip.accounts[0].balanceMinor, 20000);
 assert.equal(accountRoundTrip.accounts[0].asOf, balanceNow - day);
 assert.equal(FolioData.transactionsFromCsv('date,amount,currency,direction,merchant,category\n2026-10-01,10,EGP,expense,Shop,Other').some(row => row.balanceMinor != null), false);
 
+const intakeNow = Date.parse('2026-10-12T12:00:00.000Z');
+const clearAlert = { id: 'n1', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Carrefour', occurredAt: intakeNow, confidence: 'high', ambiguous: false };
+const clearDecision = FolioData.notificationIntake([], clearAlert, false);
+assert.equal(clearDecision.status, 'confirmed', 'a clear high-confidence alert is confirmed');
+assert.equal(clearDecision.review, false);
+assert.equal(clearDecision.autoConfirmed, true);
+assert.equal(FolioData.notificationIntake([], Object.assign({}, clearAlert, { confidence: 'low' }), false).status, 'suggested', 'low confidence stays in review');
+assert.equal(FolioData.notificationIntake([], Object.assign({}, clearAlert, { confidence: undefined }), false).status, 'suggested', 'a queued alert with no confidence stays in review');
+assert.equal(FolioData.notificationIntake([], Object.assign({}, clearAlert, { ambiguous: true }), false).status, 'suggested', 'an ambiguous amount stays in review');
+assert.equal(FolioData.notificationIntake([], Object.assign({}, clearAlert, { ambiguous: 'true' }), false).status, 'suggested');
+const forced = FolioData.notificationIntake([], clearAlert, true);
+assert.equal(forced.status, 'suggested');
+assert.equal(forced.autoConfirmed, false, 'always review overrides a high-confidence parse');
+assert.equal(FolioData.notificationIntake([
+  { id: 'old', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Carrefour Market', occurredAt: intakeNow - 1000, status: 'confirmed' }
+], Object.assign({}, clearAlert, { id: 'n2' }), false).status, 'duplicate-candidate', 'the same merchant and amount within a day needs review');
+assert.equal(FolioData.notificationIntake([
+  { id: 'card', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Card payment', occurredAt: intakeNow - 1000, status: 'confirmed' }
+], Object.assign({}, clearAlert, { id: 'n3', merchant: 'Card payment' }), false).status, 'confirmed', 'a generic card-payment label is not a duplicate');
+assert.equal(FolioData.notificationIntake([
+  { id: 'gone', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Carrefour', occurredAt: intakeNow - 1000, status: 'rejected' }
+], clearAlert, false).status, 'confirmed', 'a rejected row does not block a new alert');
+assert.equal(FolioData.notificationIntake([
+  { id: 'old-day', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Carrefour', occurredAt: intakeNow - 25 * 60 * 60 * 1000, status: 'confirmed' }
+], clearAlert, false).status, 'confirmed', 'a match older than a day is not a duplicate candidate');
+
+const observed = FolioData.migrate({ currency: 'EGP', reportedBalanceMinor: 1000, balanceReportedAt: intakeNow, transactions: [] }, null).state;
+assert.equal(FolioData.rememberStatedBalance(observed, { amountMinor: 501000, currency: 'EGP', observedAt: intakeNow }), true);
+assert.equal(observed.reportedBalanceMinor, 1000, 'a stated balance does not replace the confirmed balance');
+assert.equal(observed.balanceReportedAt, intakeNow);
+assert.equal(observed.balanceObservations.length, 1);
+assert.equal(observed.balanceObservations[0].amountMinor, 501000);
+assert.equal(observed.balanceObservations[0].provenance, 'notification');
+assert.equal(FolioData.rememberStatedBalance(observed, { amountMinor: 501000, currency: 'EGP', observedAt: intakeNow }), false, 'the same observation is not stored twice');
+for (let i = 0; i < 40; i++) FolioData.rememberStatedBalance(observed, { amountMinor: 1000 + i, currency: 'EGP', observedAt: intakeNow + i + 1 });
+assert.equal(observed.balanceObservations.length, 30, 'balance notes stay capped');
+assert.equal(observed.reportedBalanceMinor, 1000);
+
+const keptSuggested = FolioData.migrate({
+  schemaVersion: 2,
+  currency: 'EGP',
+  alwaysReviewNotifications: true,
+  balanceObservations: [{ amountMinor: 501000, currency: 'EGP', observedAt: intakeNow, source: 'notification', provenance: 'notification' }],
+  transactions: [
+    { id: 'waiting', source: 'notification', review: true, status: 'suggested', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Shop', category: 'Other', occurredAt: intakeNow },
+    { id: 'flagged', source: 'notification', review: true, amountMinor: 700, currency: 'EGP', direction: 'expense', merchant: 'Market', category: 'Other', occurredAt: intakeNow }
+  ]
+}, null);
+assert.equal(keptSuggested.snapshot, null, 'schema 2 is not snapshotted again');
+assert.equal(keptSuggested.state.alwaysReviewNotifications, true);
+assert.equal(keptSuggested.state.transactions[0].status, 'suggested', 'migration does not confirm an existing review item');
+assert.equal(keptSuggested.state.transactions[1].status, 'suggested', 'a review flag without a status stays suggested');
+assert.equal(FolioData.transactionStatus(keptSuggested.state.transactions[0]), 'suggested');
+assert.equal(keptSuggested.state.balanceObservations[0].amountMinor, 501000);
+const missingNotes = FolioData.migrate({ currency: 'EGP', transactions: [] }, null);
+assert.equal(missingNotes.state.balanceObservations.length, 0);
+assert.equal(missingNotes.state.alwaysReviewNotifications, false);
+const notesRoundTrip = FolioData.restoreBackup(JSON.stringify(FolioData.buildBackup(observed)));
+assert.equal(notesRoundTrip.reportedBalanceMinor, 1000);
+assert.equal(notesRoundTrip.balanceObservations.length, 30);
+assert.equal(notesRoundTrip.balanceObservations[notesRoundTrip.balanceObservations.length - 1].amountMinor, 1039);
+
 console.log('PASS money, migration, backup and legacy CSV checks');

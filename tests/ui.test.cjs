@@ -328,5 +328,84 @@ assert.ok(flowHome.doc.getElementById('toast-region').innerHTML.includes('Undo')
 vm.runInContext('undoFastEntry()', flowHome.sandbox);
 assert.equal(JSON.parse(flowHome.data.get('folio_finance_v1')).transactions.some(entry => entry.merchant === 'Kiosk'), false, 'undo removes the quick add');
 
+function nativeApi(events, acked) {
+  return {
+    notificationAccessGranted() { return true; },
+    getCaptureDiagnostics() { return '{"allowed":1,"parsed":1,"unrecognized":0,"lastAt":0,"lastResult":""}'; },
+    getObservedSources() { return '[]'; },
+    getPendingTransactions() { return JSON.stringify(events); },
+    ackTransactions() { acked.n += 1; },
+    captureEnabled() { return true; },
+    getSourcePackages() { return '[]'; },
+    setDarkChrome() {}
+  };
+}
+const intakeWhen = Date.now();
+const intakeBoot = boot({
+  demo: false,
+  currency: 'EGP',
+  v2Onboarded: true,
+  reportedBalanceMinor: 100000,
+  balanceReportedAt: intakeWhen - 86400000,
+  transactions: []
+});
+intakeBoot.sandbox.window.scrollTo = () => {};
+const acked = { n: 0 };
+const bridge = nativeApi([
+  { id: 'pay-5', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Carrefour', category: 'Food & drinks', occurredAt: intakeWhen, source: 'notification', confidence: 'high', ambiguous: false, statedBalanceMinor: 501000, statedBalanceCurrency: 'EGP' },
+  { id: 'low-1', amountMinor: 900, currency: 'EGP', direction: 'expense', merchant: 'Kiosk', category: 'Other', occurredAt: intakeWhen, source: 'notification', confidence: 'low', ambiguous: false },
+  { id: 'dup-5', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Carrefour', category: 'Food & drinks', occurredAt: intakeWhen, source: 'notification', confidence: 'high', ambiguous: false },
+  { id: 'vague', amountMinor: 1200, currency: 'EGP', direction: 'expense', merchant: 'Shop', category: 'Other', occurredAt: intakeWhen, source: 'notification', ambiguous: true }
+], acked);
+intakeBoot.sandbox.FolioNative = bridge;
+intakeBoot.sandbox.window.FolioNative = bridge;
+vm.runInContext('refreshNative()', intakeBoot.sandbox);
+const intakeState = JSON.parse(intakeBoot.data.get('folio_finance_v1'));
+const paid = intakeState.transactions.find(row => row.id === 'pay-5');
+assert.equal(paid.status, 'confirmed');
+assert.equal(paid.autoConfirmed, true);
+assert.equal(paid.review, false);
+assert.equal(Object.prototype.hasOwnProperty.call(paid, 'statedBalanceMinor'), false, 'a stated balance is not stored on the transaction');
+assert.equal(intakeState.reportedBalanceMinor, 100000, 'notification intake does not replace the entered balance');
+assert.equal(intakeState.balanceObservations[0].amountMinor, 501000);
+assert.equal(intakeState.balanceObservations[0].currency, 'EGP');
+assert.equal(intakeState.transactions.find(row => row.id === 'low-1').status, 'suggested');
+assert.equal(intakeState.transactions.find(row => row.id === 'dup-5').status, 'duplicate-candidate');
+assert.equal(intakeState.transactions.find(row => row.id === 'vague').status, 'suggested', 'an ambiguous amount is not auto-confirmed');
+assert.equal(vm.runInContext('txStats(monthTx()).expense', intakeBoot.sandbox), 500, 'only the auto-confirmed amount is in the month total');
+vm.runInContext("nav('transactions')", intakeBoot.sandbox);
+const intakeHtml = intakeBoot.doc.getElementById('root').innerHTML;
+assert.ok(intakeHtml.includes('Auto-saved · Counted'));
+assert.ok(intakeHtml.includes('aria-label="Undo Carrefour"'));
+assert.ok(intakeHtml.includes('aria-label="Reject Carrefour"'));
+assert.ok(intakeHtml.includes('aria-label="Edit Carrefour"'));
+assert.ok(intakeHtml.includes('aria-label="Confirm Kiosk"'), 'a low-confidence row still asks for confirm');
+vm.runInContext('undoAutoNotifications()', intakeBoot.sandbox);
+const undone = JSON.parse(intakeBoot.data.get('folio_finance_v1')).transactions.find(row => row.id === 'pay-5');
+assert.equal(undone.status, 'rejected');
+assert.equal(undone.autoConfirmed, false);
+assert.equal(vm.runInContext('txStats(monthTx()).expense', intakeBoot.sandbox), 0, 'undo removes the auto-confirmed amount from the total');
+assert.equal(acked.n, 1, 'the queue is acknowledged after a successful save');
+
+const reviewFirst = boot({
+  demo: false,
+  currency: 'EGP',
+  v2Onboarded: true,
+  alwaysReviewNotifications: true,
+  transactions: []
+});
+reviewFirst.sandbox.window.scrollTo = () => {};
+const reviewBridge = nativeApi([
+  { id: 'held', amountMinor: 500, currency: 'EGP', direction: 'expense', merchant: 'Bakery', category: 'Food & drinks', occurredAt: intakeWhen, source: 'notification', confidence: 'high', ambiguous: false }
+], { n: 0 });
+reviewFirst.sandbox.FolioNative = reviewBridge;
+reviewFirst.sandbox.window.FolioNative = reviewBridge;
+vm.runInContext('refreshNative()', reviewFirst.sandbox);
+const held = JSON.parse(reviewFirst.data.get('folio_finance_v1')).transactions.find(row => row.id === 'held');
+assert.equal(held.status, 'suggested', 'the always-review setting keeps a clear alert unconfirmed');
+assert.equal(vm.runInContext('txStats(monthTx()).expense', reviewFirst.sandbox), 0);
+vm.runInContext("nav('settings')", reviewFirst.sandbox);
+assert.ok(reviewFirst.doc.getElementById('root').innerHTML.includes('Always review notifications'));
+
 console.log('PASS bundled interface and tracking setup checks');
 require('./boot.test.cjs');

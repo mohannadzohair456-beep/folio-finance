@@ -71,6 +71,9 @@
    Schema 2: each transaction has status suggested, confirmed, rejected, or
    duplicate-candidate. Existing rows become confirmed. A notification row
    flagged review:true becomes suggested. Budgets are not converted again.
+   Auto-confirm does not rewrite stored statuses. alwaysReviewNotifications
+   and balanceObservations are optional and default to off and empty. A bank
+   message can note a stated balance; it does not replace a balance the user entered.
    Planning fields monthlyBudgetMinor, monthlyIncomeMinor and reportedBalanceMinor
    were already minor units before schema 1 and are never multiplied again. */
 (function (root) {
@@ -118,7 +121,9 @@
       gameya: null,
       commitments: null,
       savingsReservedMinor: null,
-      emergencyReserveMinor: null
+      emergencyReserveMinor: null,
+      alwaysReviewNotifications: false,
+      balanceObservations: []
     };
   }
 
@@ -379,6 +384,8 @@
       state.legacyBalanceReportedAt = clone(input.balanceReportedAt);
     }
     state.balanceUntracked = input.balanceUntracked === true;
+    state.alwaysReviewNotifications = input.alwaysReviewNotifications === true;
+    state.balanceObservations = coerceObservations(input.balanceObservations);
     assignAccounts(state, input);
 
     const monthlyBudget = finiteMinor(input.monthlyBudgetMinor);
@@ -412,6 +419,91 @@
     assignRunway(state, input);
     if (state.v2Onboarded !== true && storedWorkspaceHasLedger(state)) state.v2Onboarded = true;
     return { state: state, snapshot: snapshot, migrated: needsMigration };
+  }
+
+  function coerceObservations(list) {
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (let i = 0; i < list.length && out.length < 30; i++) {
+      const row = list[i];
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+      const amount = finiteMinor(row.amountMinor);
+      const currency = canonicalCurrency(row.currency);
+      const at = transactionTime(row.observedAt);
+      if (amount == null || !currency || at == null) continue;
+      out.push({
+        amountMinor: amount,
+        currency: currency,
+        observedAt: at,
+        source: 'notification',
+        provenance: 'notification'
+      });
+    }
+    return out;
+  }
+
+  function rememberStatedBalance(state, observation) {
+    if (!state || !observation) return false;
+    const amount = finiteMinor(observation.amountMinor);
+    const currency = canonicalCurrency(observation.currency);
+    const at = transactionTime(observation.observedAt);
+    if (amount == null || !currency || at == null) return false;
+    const reported = state.reportedBalanceMinor;
+    const reportedAt = state.balanceReportedAt;
+    if (!Array.isArray(state.balanceObservations)) state.balanceObservations = [];
+    const row = {
+      amountMinor: amount,
+      currency: currency,
+      observedAt: at,
+      source: 'notification',
+      provenance: 'notification'
+    };
+    const last = state.balanceObservations[state.balanceObservations.length - 1];
+    if (last && last.amountMinor === row.amountMinor && last.currency === row.currency && last.observedAt === row.observedAt) return false;
+    state.balanceObservations.push(row);
+    if (state.balanceObservations.length > 30) state.balanceObservations = state.balanceObservations.slice(-30);
+    state.reportedBalanceMinor = reported;
+    state.balanceReportedAt = reportedAt;
+    return true;
+  }
+
+  function merchantKey(value) {
+    return String(value == null ? '' : value).toLowerCase().replace(/[^a-z0-9\u0600-\u06ff ]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function merchantsLooselySame(left, right) {
+    const a = merchantKey(left);
+    const b = merchantKey(right);
+    if (!a || !b) return false;
+    if (a === 'card payment' || a === 'incoming transfer' || b === 'card payment' || b === 'incoming transfer') return false;
+    if (a === b) return true;
+    return a.length >= 4 && b.length >= 4 && (a.indexOf(b) >= 0 || b.indexOf(a) >= 0);
+  }
+
+  /* High confidence, one clear amount, and not a possible duplicate can be
+     confirmed. Everything else stays on the review list. Stored rows are not
+     passed through this function during migration. */
+  function notificationIntake(transactions, incoming, alwaysReview) {
+    const amount = Number(incoming && incoming.amountMinor);
+    const direction = incoming && incoming.direction;
+    const currency = incoming && incoming.currency;
+    const when = transactionTime(incoming && incoming.occurredAt);
+    const high = !!(incoming && incoming.confidence === 'high' && incoming.ambiguous !== true && incoming.ambiguous !== 'true');
+    let duplicate = false;
+    if (Number.isFinite(amount) && when != null && Array.isArray(transactions)) {
+      for (let i = 0; i < transactions.length; i++) {
+        const row = transactions[i];
+        if (!row || row.id === incoming.id) continue;
+        if (transactionStatus(row) === 'rejected') continue;
+        if (Number(row.amountMinor) !== amount || row.currency !== currency || row.direction !== direction) continue;
+        const rowWhen = transactionTime(row.occurredAt);
+        if (rowWhen == null || Math.abs(rowWhen - when) > 24 * 60 * 60 * 1000) continue;
+        if (merchantsLooselySame(row.merchant, incoming.merchant)) duplicate = true;
+      }
+    }
+    if (duplicate) return { status: 'duplicate-candidate', review: true, autoConfirmed: false };
+    if (alwaysReview === true || !high) return { status: 'suggested', review: true, autoConfirmed: false };
+    return { status: 'confirmed', review: false, autoConfirmed: true };
   }
 
   function coerceAccount(entry, index) {
@@ -749,6 +841,8 @@
     balanceFreshness: balanceFreshness,
     untrackedMovement: untrackedMovement,
     transactionStatus: transactionStatus,
+    rememberStatedBalance: rememberStatedBalance,
+    notificationIntake: notificationIntake,
     summarize: summarize,
     budgetTotalMinor: budgetTotalMinor,
     buildBackup: buildBackup,
@@ -863,8 +957,8 @@ function cashChart(){const records=monthTx(),today=new Date(),maxDay=Math.max(10
 function donut(){let totals=catTotals(monthTx());let total=totals.reduce((a,b)=>a+b[1],0);if(!total)return `<div class="empty"><div class="bubble">${icon('chart',23)}</div><strong>No spending yet</strong>Add transactions to see your spending mix.</div>`;
  let degree=0;let sections=totals.map(([name,val])=>{let start=degree;degree+=val/total*360;return `${COLORS[name]||'#becdc3'} ${start}deg ${degree}deg`;});let gradient=`conic-gradient(${sections.join(',')})`;
  return `<div class="donut-layout"><div class="donut" style="background:${gradient}"><div class="donut-inner"><strong>${totals.length}</strong><span>categories</span></div></div><div class="donut-legend">${totals.slice(0,5).map(([cat,v])=>`<div class="category-row"><div class="left"><i class="dot" style="background:${COLORS[cat]||'#becdc3'}"></i><span class="name">${h(cat)}</span></div><strong>${Math.round(v/total*100)}%</strong></div>`).join('')}</div></div>`;}
-function txOriginLabel(t){const status=FolioData.transactionStatus(t);if(status==='duplicate-candidate')return 'Possible duplicate · Review';if(status==='suggested')return 'Auto-detected · Review';if(status==='rejected')return 'Rejected';if(t.source==='notification')return 'Auto-detected';if(t.source==='demo')return 'Sample';return 'Manual';}
-function singleTx(t){const ico=catIcon(t.category||'Other'),iclass=String(t.category||'Other').toLowerCase().replace(/[^a-z]/g,'').replace('fooddrinks','food').replace('billsutilities','bills');const date=new Date(t.occurredAt);const sameDay=date.toDateString()===new Date().toDateString();const status=FolioData.transactionStatus(t);const review=status==='suggested'||status==='duplicate-candidate';const actions=review?`<div class="tr-review"><button type="button" class="mini-link" aria-label="Confirm ${h(t.merchant)}" onclick="reviewTransaction('${h(t.id)}','confirmed')">Confirm</button><button type="button" class="mini-link" aria-label="Reject ${h(t.merchant)}" onclick="reviewTransaction('${h(t.id)}','rejected')">Reject</button><button type="button" class="mini-link" aria-label="Edit ${h(t.merchant)}" onclick="editById('${h(t.id)}')">Edit</button></div>`:'';if(review)return `<div class="transaction-row"><div class="tr-left"><div class="tr-icon ${iclass}">${icon(ico)}</div><div style="min-width:0"><div class="tr-title">${h(t.merchant)}</div><div class="tr-sub">${h(t.category)} · ${h(txOriginLabel(t))}</div>${actions}</div></div><div class="tr-right"><div class="tr-amount ${t.direction==='income'?'positive':''}">${t.direction==='income'?'+':'−'}${fmt(t.amountMinor,t.currency)}</div><div class="tr-meta">${sameDay?'Today':date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div></div></div>`;return `<div class="transaction-row" tabindex="0" role="button" aria-label="Edit ${h(t.merchant)}" onclick="editById('${h(t.id)}')" onkeydown="if(event.key==='Enter')editById('${h(t.id)}')"><div class="tr-left"><div class="tr-icon ${iclass}">${icon(ico)}</div><div style="min-width:0"><div class="tr-title">${h(t.merchant)}</div><div class="tr-sub">${h(t.category)} · ${h(txOriginLabel(t))}</div></div></div><div class="tr-right"><div class="tr-amount ${t.direction==='income'?'positive':''}">${t.direction==='income'?'+':'−'}${fmt(t.amountMinor,t.currency)}</div><div class="tr-meta">${sameDay?'Today':date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div></div></div>`;}
+function txOriginLabel(t){const status=FolioData.transactionStatus(t);if(status==='duplicate-candidate')return 'Possible duplicate · Review';if(status==='suggested')return 'Auto-detected · Review';if(status==='rejected')return 'Rejected';if(t.source==='notification'&&t.autoConfirmed===true)return 'Auto-saved · Counted';if(t.source==='notification')return 'Auto-detected';if(t.source==='demo')return 'Sample';return 'Manual';}
+function singleTx(t){const ico=catIcon(t.category||'Other'),iclass=String(t.category||'Other').toLowerCase().replace(/[^a-z]/g,'').replace('fooddrinks','food').replace('billsutilities','bills');const date=new Date(t.occurredAt);const sameDay=date.toDateString()===new Date().toDateString();const status=FolioData.transactionStatus(t);const review=status==='suggested'||status==='duplicate-candidate';const auto=status==='confirmed'&&t.source==='notification'&&t.autoConfirmed===true;const actions=review?`<div class="tr-review"><button type="button" class="mini-link" aria-label="Confirm ${h(t.merchant)}" onclick="reviewTransaction('${h(t.id)}','confirmed')">Confirm</button><button type="button" class="mini-link" aria-label="Reject ${h(t.merchant)}" onclick="reviewTransaction('${h(t.id)}','rejected')">Reject</button><button type="button" class="mini-link" aria-label="Edit ${h(t.merchant)}" onclick="editById('${h(t.id)}')">Edit</button></div>`:(auto?`<div class="tr-review"><button type="button" class="mini-link" aria-label="Undo ${h(t.merchant)}" onclick="undoAutoNotification('${h(t.id)}')">Undo</button><button type="button" class="mini-link" aria-label="Edit ${h(t.merchant)}" onclick="editById('${h(t.id)}')">Edit</button><button type="button" class="mini-link" aria-label="Reject ${h(t.merchant)}" onclick="reviewTransaction('${h(t.id)}','rejected')">Reject</button></div>`:'');if(review||auto)return `<div class="transaction-row"><div class="tr-left"><div class="tr-icon ${iclass}">${icon(ico)}</div><div style="min-width:0"><div class="tr-title">${h(t.merchant)}</div><div class="tr-sub">${h(t.category)} · ${h(txOriginLabel(t))}</div>${actions}</div></div><div class="tr-right"><div class="tr-amount ${t.direction==='income'?'positive':''}">${t.direction==='income'?'+':'−'}${fmt(t.amountMinor,t.currency)}</div><div class="tr-meta">${sameDay?'Today':date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div></div></div>`;return `<div class="transaction-row" tabindex="0" role="button" aria-label="Edit ${h(t.merchant)}" onclick="editById('${h(t.id)}')" onkeydown="if(event.key==='Enter')editById('${h(t.id)}')"><div class="tr-left"><div class="tr-icon ${iclass}">${icon(ico)}</div><div style="min-width:0"><div class="tr-title">${h(t.merchant)}</div><div class="tr-sub">${h(t.category)} · ${h(txOriginLabel(t))}</div></div></div><div class="tr-right"><div class="tr-amount ${t.direction==='income'?'positive':''}">${t.direction==='income'?'+':'−'}${fmt(t.amountMinor,t.currency)}</div><div class="tr-meta">${sameDay?'Today':date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div></div></div>`;}
 function reviewTransaction(id,status){if(status!=='confirmed'&&status!=='rejected')return;const row=state.transactions.find(t=>t&&String(t.id)===String(id));if(!row)return;row.status=status;row.review=false;row.reviewedAt=Date.now();persist();render();notify(status==='confirmed'?'Transaction confirmed':'Transaction rejected');}
 function txSortKey(t){const when=FolioData.transactionTime(t&&t.occurredAt);return when==null?0:when;}function lastTx(n=5){return [...state.transactions].filter(t=>t&&t.currency===state.currency).sort((a,b)=>txSortKey(b)-txSortKey(a)).slice(0,n);}
 function recentPanel(){const tx=lastTx(5);return `<section class="panel"><div class="panel-heading"><div><h2>Recent activity</h2><p>Your latest money movements</p></div><button class="mini-link" onclick="nav('transactions')">View all ${icon('arrow',13)}</button></div>${tx.length?`<div class="transaction-list">${tx.map(singleTx).join('')}</div>`:empty('Your activity starts here','Add a transaction or connect notification tracking.')}</section>`;}
@@ -879,7 +973,7 @@ function insights(){let curr=monthTx(),s=txStats(curr),parts=catTotals(curr),tot
  return `${heading('UNDERSTAND THE BIG PICTURE','Financial insights','Look beyond transactions. Find the patterns that matter.')}${demoNotice()}<div class="metrics">${metric('Total income',s.income,'in','Current calendar month',true)}${metric('Total expenses',s.expense,'out','Current calendar month')}${`<div class="metric"><div class="metric-top"><span>Savings rate</span><span class="metric-icon">${icon('chart',17)}</span></div><div class="metric-amount">${s.income?Math.round(s.net/s.income*100)+'%':'—'}</div><div class="metric-sub">${s.income?'Net cash flow as a share of income':'Add income to calculate'}</div></div>`}</div><div class="insights-grid"><section class="panel"><div class="panel-heading"><div><h2>Six-month comparison</h2><p>See your income and expenses side by side</p></div></div><div style="display:flex;gap:11px;align-items:flex-end;height:203px;padding-top:14px;border-bottom:1px solid #ecf1ec">${months.map(m=>`<div style="flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px"><div style="flex:1;width:100%;display:flex;gap:4px;align-items:flex-end;justify-content:center"><div title="Income ${h(fmt(m.income,state.currency))}" style="height:${Math.max(m.income?3:0,m.income/maxMonthly*100)}%;width:31%;background:#c3e6b1;border-radius:6px 6px 0 0"></div><div title="Expenses ${h(fmt(m.expense,state.currency))}" style="height:${Math.max(m.expense?3:0,m.expense/maxMonthly*100)}%;width:31%;background:#148568;border-radius:6px 6px 0 0"></div></div><span style="font-size:10px;color:#9cab9f">${m.label}</span></div>`).join('')}</div><div class="chart-legend" style="padding-top:13px"><span><i class="legend-dot" style="background:#c3e6b1"></i> Income</span><span><i class="legend-dot" style="background:#148568"></i> Expenses</span></div></section><section class="panel"><div class="panel-heading"><div><h2>Expense categories</h2><p>Your biggest areas of spending</p></div></div>${parts.length?parts.map(([cat,v])=>`<div class="category-bar"><div class="category-bar-title"><b>${h(cat)}</b><span>${fmt(v,state.currency)}</span></div><div class="progress"><span style="width:${v/max*100}%;background:${COLORS[cat]||'#91ab95'}"></span></div></div>`).join(''):empty('No categories yet','Your breakdown will appear here.')}</section></div><div class="panel" style="margin-top:20px"><div class="panel-heading"><div><h2>A helpful distinction</h2><p>Cash flow is not the same as your bank balance.</p></div>${icon('info',19)}</div><p style="font-size:12px;line-height:1.7;color:#7e9186;margin:0">Folio calculates income minus expenses for recorded transactions. It cannot know your current bank balance without an opening balance or direct account connection. Multiple currencies are never silently added together.</p></div>`;}
 function budgets(){let parts=catTotals(monthTx()), keys=Object.keys(currentBudgets()),spentMap=(function(list){var map={};for(var i=0;i<list.length;i++)map[list[i][0]]=list[i][1];return map;})(parts);let totalLimit=keys.reduce((s,k)=>s+(Number.isFinite(Number(currentBudgets()[k]))?Number(currentBudgets()[k]):0),0),totalSpent=keys.reduce((s,k)=>s+(Number(spentMap[k])||0),0);
  return `${heading('YOUR SPENDING GUARDRAILS','Monthly budgets','Give every category room to breathe.')}${demoNotice()}${otherBudgetNote()}${state.monthlyBudgetMinor>0?`<div class="v2-planning-banner"><span>Overall spending target</span><strong>${fmt(state.monthlyBudgetMinor,state.currency)} / month</strong><small>${fmt(state.monthlyBudgetMinor-txStats(monthTx()).expense,state.currency)} remaining after all recorded expenses. To change it, tell Ask Folio your new monthly budget.</small><button class="v2-plan-edit" onclick="nav('assistant')">Edit with Folio →</button></div>`:''}<div class="metrics">${metric('Total budget',totalLimit,'net','Across all planned categories',true)}${metric('Budgeted spending',totalSpent,'out','Spent in budgeted categories')}${metric('Budget remaining',Math.max(0,totalLimit-totalSpent),'in','Left for the current month')}</div><div class="panel"><div class="panel-heading"><div><h2>Category budgets</h2><p>Adjust your spending limits whenever you like</p></div><button class="secondary" onclick="showBudget()">${icon('plus',15)} Set a budget</button></div>${keys.length?`<div class="budget-lines">${keys.map(cat=>{let limit=Number(currentBudgets()[cat]),spent=Number(spentMap[cat])||0,pct=limit?Math.min(100,spent/limit*100):0;return `<div class="budget-line"><div class="tr-icon">${icon(catIcon(cat))}</div><div class="budget-line-content"><div class="budget-line-head"><strong>${h(cat)}</strong><small>${fmt(spent,state.currency)} / ${fmt(limit,state.currency)}</small></div><div class="progress"><span style="width:${pct}%;background:${spent>limit?'#e68074':COLORS[cat]||'#328c79'}"></span></div></div><button class="iconbtn" style="width:33px;height:33px;flex-shrink:0" title="Edit budget" onclick="showBudget('${h(cat)}')">${icon('edit',15)}</button></div>`;}).join('')}</div>`:empty('No budgets yet','Set your first category budget to manage spending.')}</div>`;}
-function settings(){let sources=Array.isArray(state.sources)?state.sources:[],permitted=native()?permissionStatus:false;return `${heading('YOUR SPACE, YOUR RULES','Settings & privacy','Control how Folio tracks, stores and displays your finances.')}${demoNotice()}${trackingPanel()}<div class="settings-stack"><section class="setting-section"><h2 class="setting-title">Automatic transaction capture</h2><p class="setting-description">Allow Folio to recognize supported financial notifications from the apps you choose. Raw notification messages are not stored.</p><div class="setting-row"><div><strong>Notification monitoring</strong><span>Only transactions from approved sources are processed on your device.</span></div><button aria-label="Toggle automatic capture" class="switch ${state.capture?'on':''}" role="switch" aria-checked="${state.capture}" onclick="toggleCapture()"></button></div><div class="setting-row"><div><strong>Android notification access</strong><span>${native()?'Grant Android system access before importing bank alerts.':'Notification access works in the installed Android app, not the browser preview.'}</span><div class="status-line ${permitted?'success':''}"><i class="dot"></i>${native()?(permitted?'Permission granted':'Permission not granted'):'Browser preview only'}</div></div><button class="secondary" ${!native()?'disabled':''} onclick="grantAccess()">${permitted?'Manage access':'Allow access'}</button></div><div class="setting-row" style="display:block"><strong style="margin-bottom:5px">Approved notification sources</strong><span style="max-width:none">Enter Android app package IDs, separated by commas. Examples for Google Messages and Samsung Messages are already added. You can include your bank’s app package ID.</span><textarea id="sourceInput" class="textinput" rows="2" style="margin-top:12px;resize:vertical">${h(sources.join(', '))}</textarea><div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" onclick="saveSources()">Save approved apps</button></div><p class="hint">For privacy, no other app’s notifications are parsed. Finances from notifications may need manual correction.</p></div></section><section class="setting-section"><h2 class="setting-title">Preferences</h2><p class="setting-description">Tailor the display to your financial life.</p><div class="setting-row"><div><strong>Reporting currency</strong><span>Only transactions in this currency enter totals; no automatic conversion is performed.</span></div><select aria-label="Reporting currency" onchange="setCurrency(this.value)">${['EGP','USD','SAR','AED','EUR','GBP'].map(c=>`<option ${state.currency===c?'selected':''}>${c}</option>`).join('')}</select></div></section><section class="setting-section"><h2 class="setting-title">Experiments</h2><p class="setting-description">Payday runway is experimental and off until you turn it on. It is a read-only estimate from a fresh balance and confirmed commitments. When an input is missing or stale, Ask Folio says insufficient data and does not invent a number. Projected payday income and an unreceived gam'eya payout are not available now. Unconfirmed notification transactions are shown separately and are not part of the number. Dates use Cairo time.</p><div class="setting-row"><div><strong>Payday runway</strong><span>Available now until payday, after confirmed rent, installments, gam'eya pay-ins, family support, utilities, subscriptions, savings, and the emergency buffer.</span></div><button type="button" aria-label="Toggle payday runway" class="switch ${state.experimentalPaydayRunway?'on':''}" role="switch" aria-checked="${state.experimentalPaydayRunway?'true':'false'}" onclick="togglePaydayRunway()"></button></div><form onsubmit="savePaydayRunway(event)"><div class="setting-row"><div><strong>Next payday</strong><span>The Cairo date you expect to be paid. The amount below is a plan, not received money.</span></div><input id="payday-date" aria-label="Next payday" type="date" value="${h(state.paydayDate||'')}"></div><div class="setting-row"><div><strong>Expected payday amount</strong><span>Major units in ${h(state.currency)}. Leave empty if you do not know it yet. Type 0 only when the amount is zero.</span></div><input id="payday-amount" aria-label="Expected payday amount" inputmode="decimal" value="${h(moneyInput(state.paydayAmountMinor))}"></div><div class="setting-row"><div><strong>Savings reserved</strong><span>Money already set aside. Leave empty until you know the amount.</span></div><input id="payday-savings" aria-label="Savings reserved" inputmode="decimal" value="${h(moneyInput(state.savingsReservedMinor))}"></div><div class="setting-row"><div><strong>Emergency buffer</strong><span>Kept out of safe to spend. Leave empty until you know the amount.</span></div><input id="payday-buffer" aria-label="Emergency buffer" inputmode="decimal" value="${h(moneyInput(state.emergencyReserveMinor))}"></div>${noneBox('payday-no-commitments','No commitments before payday',state.commitments)}<div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" type="submit">Save payday runway</button></div></form></section><section class="setting-section"><h2 class="setting-title">Your data stays yours</h2><p class="setting-description">Stored locally on your device. No account, backend, third-party analytics or network permissions required.</p><div class="setting-row"><div><strong>Export transactions (CSV)</strong><span>A spreadsheet of transactions only. Balances, budgets and settings are not included. This is what older Folio builds can import.</span></div><button class="secondary" onclick="exportCsv()">${icon('download',15)} Export CSV</button></div><div class="setting-row"><div><strong>Full JSON backup</strong><span>Transactions, category budgets, reported balance, expected salary, monthly target, currency, allowlist and onboarding state.</span></div><button class="secondary" onclick="exportJson()">${icon('download',15)} Export JSON</button></div><div class="setting-row"><div><strong>Restore a backup</strong><span>Import CSV adds transactions and keeps everything else. Import JSON replaces this device's Folio data after saving a local snapshot.</span></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="chooseImportCsv()">Import CSV</button><button class="secondary" onclick="chooseImportJson()">Import JSON</button></div></div><div class="setting-row"><div><strong>${state.demo?'Start tracking real money':'Delete all financial records'}</strong><span>${state.demo?'Permanently dismiss sample transactions and start with an empty workspace.':'Clear transaction history and budgets on this device. Cannot be undone.'}</span></div><button class="secondary ${state.demo?'':'danger'}" onclick="${state.demo?'startLive()':'clearAll()'}">${state.demo?'Start now':'Delete data'}</button></div></section><section class="setting-section" style="background:#f0f8f2"><div style="display:flex;gap:14px;align-items:flex-start"><div class="metric-icon">${icon('shield',20)}</div><div><h2 class="setting-title">Designed to respect your privacy</h2><p class="setting-description" style="margin:0">Folio only processes allowlisted sources after you opt in. The recognition is rule-based and completely offline. Imported transactions can be edited or deleted at any time.</p></div></div></section></div>`;}
+function settings(){let sources=Array.isArray(state.sources)?state.sources:[],permitted=native()?permissionStatus:false;return `${heading('YOUR SPACE, YOUR RULES','Settings & privacy','Control how Folio tracks, stores and displays your finances.')}${demoNotice()}${trackingPanel()}<div class="settings-stack"><section class="setting-section"><h2 class="setting-title">Automatic transaction capture</h2><p class="setting-description">Allow Folio to recognize supported financial notifications from the apps you choose. Raw notification messages are not stored.</p><div class="setting-row"><div><strong>Notification monitoring</strong><span>Only transactions from approved sources are processed on your device.</span></div><button aria-label="Toggle automatic capture" class="switch ${state.capture?'on':''}" role="switch" aria-checked="${state.capture}" onclick="toggleCapture()"></button></div><div class="setting-row"><div><strong>Always review notifications</strong><span>When this is on, every new alert waits until you confirm it. When it is off, a clear high-confidence alert is saved and counted immediately. You can still undo, edit, or reject it. Alerts already waiting for review stay as they are.</span></div><button type="button" aria-label="Always review notifications" class="switch ${state.alwaysReviewNotifications?'on':''}" role="switch" aria-checked="${state.alwaysReviewNotifications?'true':'false'}" onclick="toggleAlwaysReview()"></button></div><div class="setting-row"><div><strong>Android notification access</strong><span>${native()?'Grant Android system access before importing bank alerts.':'Notification access works in the installed Android app, not the browser preview.'}</span><div class="status-line ${permitted?'success':''}"><i class="dot"></i>${native()?(permitted?'Permission granted':'Permission not granted'):'Browser preview only'}</div></div><button class="secondary" ${!native()?'disabled':''} onclick="grantAccess()">${permitted?'Manage access':'Allow access'}</button></div><div class="setting-row" style="display:block"><strong style="margin-bottom:5px">Approved notification sources</strong><span style="max-width:none">Enter Android app package IDs, separated by commas. Examples for Google Messages and Samsung Messages are already added. You can include your bank’s app package ID.</span><textarea id="sourceInput" class="textinput" rows="2" style="margin-top:12px;resize:vertical">${h(sources.join(', '))}</textarea><div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" onclick="saveSources()">Save approved apps</button></div><p class="hint">For privacy, no other app’s notifications are parsed. Finances from notifications may need manual correction.</p></div></section><section class="setting-section"><h2 class="setting-title">Preferences</h2><p class="setting-description">Tailor the display to your financial life.</p><div class="setting-row"><div><strong>Reporting currency</strong><span>Only transactions in this currency enter totals; no automatic conversion is performed.</span></div><select aria-label="Reporting currency" onchange="setCurrency(this.value)">${['EGP','USD','SAR','AED','EUR','GBP'].map(c=>`<option ${state.currency===c?'selected':''}>${c}</option>`).join('')}</select></div></section><section class="setting-section"><h2 class="setting-title">Experiments</h2><p class="setting-description">Payday runway is experimental and off until you turn it on. It is a read-only estimate from a fresh balance and confirmed commitments. When an input is missing or stale, Ask Folio says insufficient data and does not invent a number. Projected payday income and an unreceived gam'eya payout are not available now. Notifications waiting for review are shown separately and are not part of the number. An auto-confirmed alert is already included. Dates use Cairo time.</p><div class="setting-row"><div><strong>Payday runway</strong><span>Available now until payday, after confirmed rent, installments, gam'eya pay-ins, family support, utilities, subscriptions, savings, and the emergency buffer.</span></div><button type="button" aria-label="Toggle payday runway" class="switch ${state.experimentalPaydayRunway?'on':''}" role="switch" aria-checked="${state.experimentalPaydayRunway?'true':'false'}" onclick="togglePaydayRunway()"></button></div><form onsubmit="savePaydayRunway(event)"><div class="setting-row"><div><strong>Next payday</strong><span>The Cairo date you expect to be paid. The amount below is a plan, not received money.</span></div><input id="payday-date" aria-label="Next payday" type="date" value="${h(state.paydayDate||'')}"></div><div class="setting-row"><div><strong>Expected payday amount</strong><span>Major units in ${h(state.currency)}. Leave empty if you do not know it yet. Type 0 only when the amount is zero.</span></div><input id="payday-amount" aria-label="Expected payday amount" inputmode="decimal" value="${h(moneyInput(state.paydayAmountMinor))}"></div><div class="setting-row"><div><strong>Savings reserved</strong><span>Money already set aside. Leave empty until you know the amount.</span></div><input id="payday-savings" aria-label="Savings reserved" inputmode="decimal" value="${h(moneyInput(state.savingsReservedMinor))}"></div><div class="setting-row"><div><strong>Emergency buffer</strong><span>Kept out of safe to spend. Leave empty until you know the amount.</span></div><input id="payday-buffer" aria-label="Emergency buffer" inputmode="decimal" value="${h(moneyInput(state.emergencyReserveMinor))}"></div>${noneBox('payday-no-commitments','No commitments before payday',state.commitments)}<div style="display:flex;justify-content:flex-end;margin-top:9px"><button class="secondary" type="submit">Save payday runway</button></div></form></section><section class="setting-section"><h2 class="setting-title">Your data stays yours</h2><p class="setting-description">Stored locally on your device. No account, backend, third-party analytics or network permissions required.</p><div class="setting-row"><div><strong>Export transactions (CSV)</strong><span>A spreadsheet of transactions only. Balances, budgets and settings are not included. This is what older Folio builds can import.</span></div><button class="secondary" onclick="exportCsv()">${icon('download',15)} Export CSV</button></div><div class="setting-row"><div><strong>Full JSON backup</strong><span>Transactions, category budgets, reported balance, expected salary, monthly target, currency, allowlist and onboarding state.</span></div><button class="secondary" onclick="exportJson()">${icon('download',15)} Export JSON</button></div><div class="setting-row"><div><strong>Restore a backup</strong><span>Import CSV adds transactions and keeps everything else. Import JSON replaces this device's Folio data after saving a local snapshot.</span></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="chooseImportCsv()">Import CSV</button><button class="secondary" onclick="chooseImportJson()">Import JSON</button></div></div><div class="setting-row"><div><strong>${state.demo?'Start tracking real money':'Delete all financial records'}</strong><span>${state.demo?'Permanently dismiss sample transactions and start with an empty workspace.':'Clear transaction history and budgets on this device. Cannot be undone.'}</span></div><button class="secondary ${state.demo?'':'danger'}" onclick="${state.demo?'startLive()':'clearAll()'}">${state.demo?'Start now':'Delete data'}</button></div></section><section class="setting-section" style="background:#f0f8f2"><div style="display:flex;gap:14px;align-items:flex-start"><div class="metric-icon">${icon('shield',20)}</div><div><h2 class="setting-title">Designed to respect your privacy</h2><p class="setting-description" style="margin:0">Folio only processes allowlisted sources after you opt in. The recognition is rule-based and completely offline. Imported transactions can be edited or deleted at any time.</p></div></div></section></div>`;}
 function render(){if(window.FolioV2)return window.FolioV2.render();document.getElementById('root').innerHTML=shell(({overview,transactions,insights,budgets,settings})[page]());}
 function dateInputValue(time){let d=new Date(time);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function showTransaction(id=null){let t=state.transactions.find(x=>x.id===id);currentEdit=id;modalType=(t&&t.direction)||'expense';let today=dateInputValue(Date.now());
@@ -887,7 +981,7 @@ function showTransaction(id=null){let t=state.transactions.find(x=>x.id===id);cu
 function editById(id){showTransaction(id);}
 function chooseType(type){modalType=type;document.querySelectorAll('.type-option button').forEach(b=>b.className=b.dataset.dir===type?'selected '+(type==='expense'?'out':''):'');let select=document.getElementById('txcategory');if(!currentEdit)select.value=type==='income'?'Other income':'Other';}
 function closeModal(){document.getElementById('modal-root').innerHTML='';currentEdit=null;}
-function saveTransaction(event){event.preventDefault();let merchant=document.getElementById('txmerchant').value.trim(),n=Number(document.getElementById('txamount').value),currency=document.getElementById('txcurrency').value,category=document.getElementById('txcategory').value,date=document.getElementById('txdate').value;if(!merchant||!Number.isFinite(n)||n<=0||n>100000000||!date){notify('Enter a valid transaction.');return;}let when=new Date(date+'T12:00:00').getTime();if(!Number.isFinite(when)){notify('Enter a valid date.');return;}let existing=state.transactions.find(x=>x.id===currentEdit);let data=Object.assign({},existing||{},{id:(existing&&existing.id)||'manual-'+Date.now()+'-'+Math.random().toString(36).slice(2,9),merchant,amountMinor:mid(n),currency,category,direction:modalType,occurredAt:when,source:(existing&&existing.source)==='notification'?'notification':'manual',status:'confirmed',review:false,reviewedAt:Date.now()});if(existing)state.transactions=state.transactions.map(t=>t.id===currentEdit?data:t);else state.transactions.push(data);persist();closeModal();render();notify(existing?'Transaction updated':'Transaction added');}
+function saveTransaction(event){event.preventDefault();let merchant=document.getElementById('txmerchant').value.trim(),n=Number(document.getElementById('txamount').value),currency=document.getElementById('txcurrency').value,category=document.getElementById('txcategory').value,date=document.getElementById('txdate').value;if(!merchant||!Number.isFinite(n)||n<=0||n>100000000||!date){notify('Enter a valid transaction.');return;}let when=new Date(date+'T12:00:00').getTime();if(!Number.isFinite(when)){notify('Enter a valid date.');return;}let existing=state.transactions.find(x=>x.id===currentEdit);let data=Object.assign({},existing||{},{id:(existing&&existing.id)||'manual-'+Date.now()+'-'+Math.random().toString(36).slice(2,9),merchant,amountMinor:mid(n),currency,category,direction:modalType,occurredAt:when,source:(existing&&existing.source)==='notification'?'notification':'manual',status:'confirmed',review:false,autoConfirmed:false,reviewedAt:Date.now()});if(existing)state.transactions=state.transactions.map(t=>t.id===currentEdit?data:t);else state.transactions.push(data);persist();closeModal();render();notify(existing?'Transaction updated':'Transaction added');}
 function deleteTransaction(id){if(!confirm('Permanently delete this transaction?'))return;state.transactions=state.transactions.filter(x=>x.id!==id);persist();closeModal();render();notify('Transaction deleted');}
 function showBudget(cat=''){let editing=Boolean(cat),stored=editing?Number(currentBudgets()[cat]):NaN,initial=Number.isFinite(stored)?(stored/100).toFixed(2):'';document.getElementById('modal-root').innerHTML=`<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="budget-title"><div class="dialog-head"><div><h3 id="budget-title">${editing?'Edit budget':'Set monthly budget'}</h3><p>Choose a comfortable spending limit.</p></div><button class="close" onclick="closeModal()" aria-label="Close">${icon('close')}</button></div><form onsubmit="saveBudget(event,'${h(cat)}')"><div class="field"><label for="bcat">Category</label><select id="bcat" ${editing?'disabled':''}>${CATEGORIES.filter(c=>!['Salary','Refunds','Other income','Transfers'].includes(c)).map(c=>`<option ${c===cat?'selected':''}>${h(c)}</option>`).join('')}</select></div><div class="field"><label for="blimit">Monthly limit (${state.currency})</label><input id="blimit" type="number" inputmode="decimal" step="0.01" min="0.01" max="100000000" required placeholder="e.g. 3000" value="${initial}"></div><div class="dialog-actions">${editing?`<button type="button" class="secondary danger" onclick="removeBudget('${h(cat)}')">Remove budget</button>`:''}<div class="right"><button type="button" class="secondary" onclick="closeModal()">Cancel</button><button type="submit" class="primary">Save budget</button></div></div></form></div></div>`;}
 function saveBudget(e,previous){e.preventDefault();let cat=previous||document.getElementById('bcat').value,limit=Number(document.getElementById('blimit').value);if(!Number.isFinite(limit)||limit<=0||limit>100000000){notify('Enter a valid budget.');return;}currentBudgets()[cat]=mid(limit);persist();closeModal();render();notify('Budget saved');}
@@ -902,6 +996,11 @@ function readMajorField(id){const node=document.getElementById(id);const text=St
 function confirmNone(id,key){const box=document.getElementById(id);const current=state[key];if(Array.isArray(current)&&current.length>0)return;state[key]=box&&box.checked?[]:null;}
 function savePaydayRunway(e){if(e&&e.preventDefault)e.preventDefault();const dateNode=document.getElementById('payday-date');const date=String(dateNode&&dateNode.value||'').trim();if(date&&!/^\d{4}-\d{2}-\d{2}$/.test(date)){notify('Enter a payday date as YYYY-MM-DD.');return;}const amount=readMajorField('payday-amount');const savings=readMajorField('payday-savings');const buffer=readMajorField('payday-buffer');if(amount.invalid||savings.invalid||buffer.invalid){notify('Enter amounts in major units, such as 15000.00, or leave the box empty.');return;}state.paydayDate=date||null;state.paydayAmountMinor=amount.empty?null:amount.value;state.paydayCurrency=amount.empty?null:state.currency;state.savingsReservedMinor=savings.empty?null:savings.value;state.emergencyReserveMinor=buffer.empty?null:buffer.value;confirmNone('payday-no-commitments','commitments');persist();render();notify('Payday runway saved. Empty inputs stay unanswered.');}
 function toggleCapture(){if(state.demo){notify('Start your private workspace before enabling capture.');return;}if(!state.capture&&!confirm('Folio will analyze new notifications from your approved apps locally to identify transactions. Other messages are discarded. Continue?'))return;state.capture=!state.capture;if(native())try{FolioNative.setCaptureEnabled(state.capture);}catch(e){}persist();render();notify(state.capture?'Capture enabled. Check notification access.':'Capture turned off');}
+function toggleAlwaysReview(){state.alwaysReviewNotifications=state.alwaysReviewNotifications!==true;persist();render();notify(state.alwaysReviewNotifications?'New notifications will wait for review.':'Clear notification transactions will be saved automatically.');}
+let autoUndoIds=null,autoUndoTimer=0;
+function showAutoUndo(ids,text){autoUndoIds=ids.slice();var region=document.getElementById('toast-region');if(!region)return;region.innerHTML='<div class="toast toast-undo"><span>'+h(text)+'</span><button type="button" class="toast-undo-btn" onclick="undoAutoNotifications()">Undo</button></div>';clearTimeout(autoUndoTimer);autoUndoTimer=setTimeout(function(){autoUndoIds=null;var live=document.getElementById('toast-region');if(live&&live.innerHTML.indexOf('undoAutoNotifications')>=0)live.innerHTML='';},7000);}
+function undoAutoNotifications(){const ids=autoUndoIds||[];if(!ids.length){notify('Nothing to undo.');return;}let changed=0;for(let i=0;i<state.transactions.length;i++){const row=state.transactions[i];if(!row||ids.indexOf(row.id)<0)continue;if(row.autoConfirmed!==true||FolioData.transactionStatus(row)!=='confirmed')continue;row.status='rejected';row.review=false;row.autoConfirmed=false;row.reviewedAt=Date.now();changed++;}autoUndoIds=null;clearTimeout(autoUndoTimer);var region=document.getElementById('toast-region');if(region)region.innerHTML='';if(!changed){notify('Those entries are no longer auto-saved.');return;}persist();render();notify(changed===1?'Auto-saved transaction undone':'Auto-saved transactions undone');}
+function undoAutoNotification(id){autoUndoIds=[String(id)];undoAutoNotifications();}
 function grantAccess(){if(!native()){notify('Install the Android app to grant notification access.');return;}FolioNative.openNotificationSettings();}
 function saveSources(){let area=document.getElementById('sourceInput');let list=[...new Set(area.value.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean))];if(list.some(s=>!(/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(s)))){notify('Use package IDs such as com.google.android.apps.messaging');return;}state.sources=list;if(native())try{FolioNative.setSourcePackages(JSON.stringify(list));}catch(e){}persist();render();notify('Approved sources updated');}
 
@@ -976,7 +1075,7 @@ function chooseImportCsv(){
 }
 
 function exportCsv(){const quote=s=>'"'+String(s==null?'':s).replace(/"/g,'""')+'"';let skipped=0;const body=[];for(const t of state.transactions){if(!t||typeof t!=='object'){skipped++;continue;}const when=FolioData.transactionTime(t.occurredAt);const amount=Number(t.amountMinor);if(when==null||!Number.isFinite(amount)){skipped++;continue;}body.push([new Date(when).toISOString().slice(0,10),t.direction,t.merchant,t.category,(amount/100).toFixed(2),t.currency,t.source,t.sourcePackage||'']);}let rows=[['Date','Direction','Merchant','Category','Amount','Currency','Source','Source package'],...body];let csv=rows.map(r=>r.map(quote).join(',')).join('\r\n');if(native()){try{FolioNative.shareCsv(csv);return;}catch(e){}}let a=document.createElement('a'),url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.href=url;a.download='folio-transactions.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);notify(skipped?`Export prepared. ${skipped} incomplete row${skipped===1?' was':'s were'} left out of the CSV and remain in Folio.`:'Export prepared');}
-function refreshNative(){if(!native())return;try{const oldPermission=permissionStatus;permissionStatus=FolioNative.notificationAccessGranted();let gotNew=false;const before=JSON.stringify(captureDiagnostics)+'|'+observedSources.join(',');try{captureDiagnostics=JSON.parse(FolioNative.getCaptureDiagnostics());observedSources=JSON.parse(FolioNative.getObservedSources());}catch(e){}if(!state.demo){const events=JSON.parse(FolioNative.getPendingTransactions());let known=new Set(state.transactions.map(t=>t.id)),received=[];for(let x of events){if(!x||typeof x!=='object'){state.legacyQueue=state.legacyQueue||[];state.legacyQueue.push(x==null?null:{legacyRaw:String(x)});continue;}const dup=state.transactions.some(t=>t&&(t.id===x.id||(x.dedupKey&&t.dedupKey===x.dedupKey&&Math.abs(Number(t.occurredAt)-Number(x.occurredAt))<=90000)));if(dup||known.has(x.id))continue;const amount=Number(x.amountMinor);if(Number.isFinite(amount)&&amount>0&&['income','expense'].includes(x.direction)){x.status=FolioData.transactionStatus(x);state.transactions.push(x);known.add(x.id);received.push(x.id);continue;}state.legacyQueue=state.legacyQueue||[];state.legacyQueue.push(x);}if(events.length){if(persist())FolioNative.ackTransactions(JSON.stringify(events.map(t=>t.id)));if(received.length){gotNew=true;notify(`${received.length} new transaction${received.length===1?'':'s'} imported`);}} }if(gotNew||(page==='settings'&&oldPermission!==permissionStatus)||(page==='overview'&&(oldPermission!==permissionStatus||before!==JSON.stringify(captureDiagnostics)+'|'+observedSources.join(','))))render();}catch(e){console.error('Native import error',e);}}
+function refreshNative(){if(!native())return;try{const oldPermission=permissionStatus;permissionStatus=FolioNative.notificationAccessGranted();let gotNew=false;const before=JSON.stringify(captureDiagnostics)+'|'+observedSources.join(',');try{captureDiagnostics=JSON.parse(FolioNative.getCaptureDiagnostics());observedSources=JSON.parse(FolioNative.getObservedSources());}catch(e){}if(!state.demo){const events=JSON.parse(FolioNative.getPendingTransactions());let known=new Set(state.transactions.map(t=>t.id)),received=[],autoIds=[],reviewCount=0;for(let x of events){if(!x||typeof x!=='object'){state.legacyQueue=state.legacyQueue||[];state.legacyQueue.push(x==null?null:{legacyRaw:String(x)});continue;}const dup=state.transactions.some(t=>t&&(t.id===x.id||(x.dedupKey&&t.dedupKey===x.dedupKey&&Math.abs(Number(t.occurredAt)-Number(x.occurredAt))<=90000)));if(dup||known.has(x.id))continue;const amount=Number(x.amountMinor);if(Number.isFinite(amount)&&amount>0&&['income','expense'].includes(x.direction)){const decision=FolioData.notificationIntake(state.transactions,x,state.alwaysReviewNotifications===true);x.status=decision.status;x.review=decision.review;x.autoConfirmed=decision.autoConfirmed;if(x.statedBalanceMinor!=null){FolioData.rememberStatedBalance(state,{amountMinor:x.statedBalanceMinor,currency:x.statedBalanceCurrency||x.currency,observedAt:x.occurredAt});delete x.statedBalanceMinor;delete x.statedBalanceCurrency;}state.transactions.push(x);known.add(x.id);received.push(x.id);if(decision.autoConfirmed)autoIds.push(x.id);else reviewCount++;continue;}state.legacyQueue=state.legacyQueue||[];state.legacyQueue.push(x);}if(events.length){if(persist())FolioNative.ackTransactions(JSON.stringify(events.map(t=>t.id)));if(received.length){gotNew=true;if(autoIds.length)showAutoUndo(autoIds,reviewCount?`${autoIds.length} saved · ${reviewCount} need review`:`${autoIds.length} notification transaction${autoIds.length===1?'':'s'} saved`);else notify(`${reviewCount} notification${reviewCount===1?'':'s'} need review`);}} }if(gotNew||(page==='settings'&&oldPermission!==permissionStatus)||(page==='overview'&&(oldPermission!==permissionStatus||before!==JSON.stringify(captureDiagnostics)+'|'+observedSources.join(','))))render();}catch(e){console.error('Native import error',e);}}
 window.folioNativeRefresh=refreshNative;
 if(native())try{state.capture=FolioNative.captureEnabled();state.sources=JSON.parse(FolioNative.getSourcePackages());}catch(e){}
 /* <folio-inline:folio-flow.js> */
@@ -1397,7 +1496,7 @@ function voiceLocaleNow(){
 function jsArg(value){return String(value==null?'':value).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function captureBar(){
   var locale=voiceLocaleNow();
-  return `<section class="capture-bar" aria-label="Record money"><div class="capture-actions"><button type="button" class="capture-fast" onclick="openFastEntry()">${icon('plus',16)} Quick add</button><button type="button" class="capture-mic" onclick="FolioV2.requestVoice()" aria-label="Voice entry">${icon('mic',18)} Voice entry</button></div><div class="capture-locales" role="group" aria-label="Voice language"><button type="button" class="capture-locale ${locale==='en-US'?'sel':''}" aria-pressed="${locale==='en-US'?'true':'false'}" onclick="FolioV2.chooseLocale('en-US')">English</button><button type="button" class="capture-locale ${locale==='ar-EG'?'sel':''}" aria-pressed="${locale==='ar-EG'?'true':'false'}" onclick="FolioV2.chooseLocale('ar-EG')">العربية</button></div><p class="capture-hint">Folio asks Android to prefer offline speech. If this phone has no offline pack, the recognizer may use the network. Nothing is saved until you confirm.</p></section>`;
+  return `<section class="capture-bar" aria-label="Record money"><div class="capture-actions"><button type="button" class="capture-fast" onclick="openFastEntry()">${icon('plus',16)} Quick add</button><button type="button" class="capture-mic" onclick="FolioV2.requestVoice()" aria-label="Voice entry">${icon('mic',18)} Voice entry</button></div><div class="capture-locales" role="group" aria-label="Voice language"><button type="button" class="capture-locale ${locale==='en-US'?'sel':''}" aria-pressed="${locale==='en-US'?'true':'false'}" onclick="FolioV2.chooseLocale('en-US')">English</button><button type="button" class="capture-locale ${locale==='ar-EG'?'sel':''}" aria-pressed="${locale==='ar-EG'?'true':'false'}" onclick="FolioV2.chooseLocale('ar-EG')">العربية</button></div><p class="capture-hint">Folio asks Android to prefer offline speech. If this phone has no offline pack, Folio says how to install it. The system speech screen's recognizer may use the network. Nothing is saved until you confirm.</p></section>`;
 }
 function moneyFlowPanel(){
   if(!window.FolioFlow)return '';
@@ -2292,7 +2391,7 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
         { id: 'emergency_buffer', label: 'Emergency buffer', amount_minor: -emergency.value, included: true },
         { id: 'planned_payday', label: 'Planned payday income', amount_minor: paydayAmount.value, included: false },
         { id: 'gam_eya_payouts', label: "Gam'eya payouts", amount_minor: sums.payout, included: false },
-        { id: 'unconfirmed_notifications', label: 'Unconfirmed notification transactions', amount_minor: txSums.unconfirmedNet, included: false }
+        { id: 'unconfirmed_notifications', label: 'Notifications waiting for review', amount_minor: txSums.unconfirmedNet, included: false }
       ],
       bills_due: billsDue,
       unconfirmed_transactions: txSums.unconfirmed,
@@ -3532,8 +3631,8 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
     if (result.unconfirmed_transactions && result.unconfirmed_transactions.length) {
       var pendingCount = typeof result.unconfirmed_count === 'number' ? result.unconfirmed_count : result.unconfirmed_transactions.length;
       text += ar
-        ? ' فيه ' + pendingCount + ' عملية محتاجة مراجعة؛ الإشعارات اللي مش مؤكدة مش بنعتبرها دخل أو مصروف نهائي.'
-        : ' Unconfirmed notification transactions (' + pendingCount + ') are excluded from that number.';
+        ? ' فيه ' + pendingCount + ' عملية لسه محتاجة مراجعة ومش محسوبة. الإشعار اللي اتأكد لوحده محسوب في الرقم.'
+        : ' Notifications waiting for review (' + pendingCount + ') are excluded from that number. An auto-confirmed alert is already included.';
       if (typeof result.unconfirmed_net_minor === 'number') {
         text += ar
           ? ' صافيها لوحده ' + spokenAmount(result.unconfirmed_net_minor, result.currency, 'ar') + '.'
@@ -4163,7 +4262,7 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
   'use strict';
   const $=id=>document.getElementById(id);
   const money=n=>fmt(Number(n)||0,state.currency);
-  let stage=0, draft=null, dialogue=[], voiceLocale='en-US', showPrivacySheet=false, captureConsent=false;
+  let stage=0, draft=null, dialogue=[], voiceLocale='en-US', showPrivacySheet=false, captureConsent=false, voiceSystemOffer=false;
   const amountText=n=>new Intl.NumberFormat('en-US',{maximumFractionDigits:2}).format(n);
   function numberValue(s){
     if(!s)return null;
@@ -4200,6 +4299,11 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
     if(fresh==='fresh')label='Entered balance is current';
     if(fresh==='stale')label='Entered balance is stale';
     let text=label+'.'+(moved?' Untracked movements are not in this figure.':'')+' Not a bank balance.';
+    const observations=Array.isArray(state.balanceObservations)?state.balanceObservations:[];
+    const latest=observations.length?observations[observations.length-1]:null;
+    if(latest&&latest.currency===state.currency&&Number.isFinite(Number(latest.amountMinor))){
+      text+=' A bank message stated '+money(latest.amountMinor)+'. That note is not your confirmed balance.';
+    }
     const accounts=Array.isArray(state.accounts)?state.accounts:[];
     for(let i=0;i<accounts.length;i++){
       const account=accounts[i];
@@ -4345,8 +4449,17 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
   function voiceNetworkNotice(){
     return "Folio asks Android to prefer offline recognition. This app has no internet permission and does not send audio anywhere. If this phone has no offline speech pack, the device's own recognizer may still send audio to its provider over the network. You will see a draft and nothing is saved until you confirm.";
   }
+  function voiceErrorText(error){
+    const raw=String(error==null?'':error);
+    const prefixes=['OFFLINE_PACK','NO_RECOGNIZER','MIC_DENIED'];
+    for(let i=0;i<prefixes.length;i++){
+      if(raw.indexOf(prefixes[i])===0)return raw.slice(prefixes[i].length).replace(/^\s+/,'');
+    }
+    return raw;
+  }
   function beginVoice(){
     showPrivacySheet=false;
+    voiceSystemOffer=false;
     render();
     if(!native()||typeof FolioNative.startVoiceRecognition!=='function'){
       const note='Voice input requires the installed Android app and a compatible speech recognition provider. You can type instead. Nothing was saved.';
@@ -4355,6 +4468,8 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
       render();
       return;
     }
+    message('Listening. Speak in '+(voiceLocale==='ar-EG'?'Arabic':'English')+'. Nothing is saved until you confirm.');
+    render();
     try{FolioNative.startVoiceRecognition(voiceLocale);}
     catch(e){
       const note='Speech recognition is unavailable. Please type your request. Nothing was saved.';
@@ -4363,14 +4478,37 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
       render();
     }
   }
-  function onVoiceResult(text,error){
-    ensureDeferredEngines();
-    if(error){
-      message(error);
-      if(typeof notify==='function')notify(error);
+  function beginSystemVoice(){
+    voiceSystemOffer=false;
+    if(!native()||typeof FolioNative.startSystemVoiceRecognition!=='function'){
+      const note='The system speech screen is unavailable in this preview. You can type instead. Nothing was saved.';
+      message(note);
+      if(typeof notify==='function')notify(note);
       render();
       return;
     }
+    message('Opening the system speech screen. That screen runs in another app and may send audio to its provider. Nothing is saved until you confirm.');
+    render();
+    try{FolioNative.startSystemVoiceRecognition(voiceLocale);}
+    catch(e){
+      const note='The system speech screen could not open. Please type your request. Nothing was saved.';
+      message(note);
+      if(typeof notify==='function')notify(note);
+      render();
+    }
+  }
+  function onVoiceResult(text,error){
+    ensureDeferredEngines();
+    if(error){
+      const raw=String(error);
+      voiceSystemOffer=raw.indexOf('OFFLINE_PACK')===0||raw.indexOf('NO_RECOGNIZER')===0;
+      const note=voiceErrorText(raw);
+      message(note);
+      if(typeof notify==='function')notify(note);
+      render();
+      return;
+    }
+    voiceSystemOffer=false;
     const plan=function(spoken){return window.FolioAssistant?FolioAssistant.planCommand(spoken,assistantLedger()):planCommand(spoken);};
     const accepted=window.FolioFlow&&typeof FolioFlow.acceptVoiceTranscript==='function'?FolioFlow.acceptVoiceTranscript(text,plan):null;
     if(!accepted||!accepted.ok){render();return;}
@@ -4451,6 +4589,7 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
     return `${heading('FINANCIAL COMPANION','Ask Folio','Simple, transparent planning. You approve every change to your records.')}
       <div class="v2-assistant">${snapshots}
       <div class="v2-chat-shell">${chat}
+      ${voiceSystemOffer?`<div class="v2-action-review"><span>OFFLINE SPEECH</span><strong>Offline speech pack not installed: install Arabic/English offline speech in Google settings.</strong><p>حزمة النطق بدون إنترنت غير مثبّتة: ثبّت العربية والإنجليزية من إعدادات Google.</p><button type="button" class="v2-next" onclick="FolioV2.beginSystemVoice()">Open system speech screen</button></div>`:''}
       ${draft?`<div class="v2-action-review"><span>REVIEW BEFORE SAVING</span><strong>${h(draft.title)}</strong><div class="v2-action-line"><button onclick="FolioV2.cancelDraft()" class="v2-outline">Cancel</button><button onclick="FolioV2.applyDraft()" class="v2-next">Confirm & save</button></div></div>`:''}
       <div class="v2-compose"><textarea id="folio-assistant-input" rows="2" maxlength="500" placeholder="Ask about your money, or record a transaction..." aria-label="Message Folio"></textarea><div class="v2-compose-bottom"><div><button class="v2-mic" onclick="FolioV2.requestVoice()" title="Voice entry" aria-label="Voice entry">Voice entry</button><button class="v2-locale ${voiceLocale==='en-US'?'sel':''}" onclick="FolioV2.chooseLocale('en-US')">EN</button><button class="v2-locale ${voiceLocale==='ar-EG'?'sel':''}" onclick="FolioV2.chooseLocale('ar-EG')">AR</button></div><button class="v2-next" onclick="FolioV2.submitText()">Send ↗</button></div></div></div>
       <div class="v2-example-row"><button onclick="FolioV2.sendExample('I have 20000 in my bank')">Set my balance</button><button onclick="FolioV2.sendExample('My monthly budget is 5000')">Set a budget</button><button onclick="FolioV2.sendExample('How am I doing?')">Monthly overview</button><button onclick="FolioV2.sendExample('Can I afford 1500?')">Can I afford it?</button></div>
@@ -4478,7 +4617,7 @@ if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}
   state.monthlyIncomeMinor=Number(state.monthlyIncomeMinor)||0;
   if(!Number.isFinite(state.reportedBalanceMinor))state.reportedBalanceMinor=null;
   if(!Number.isFinite(state.balanceReportedAt))state.balanceReportedAt=null;
-  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,enteredBalanceNote,financeSummary,voiceNetworkNotice};
+  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,beginSystemVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,enteredBalanceNote,financeSummary,voiceNetworkNotice};
   window.folioGoHome=()=>{if(!state.v2Onboarded){previousStep();return;}onNav('overview');};
   if(state.v2Onboarded && page==='overview' && typeof requestAnimationFrame==='function' && typeof folioAfterPaint==='function'){
     if(!window.folioBootPainted && typeof paintLedgerShell==='function') paintLedgerShell();

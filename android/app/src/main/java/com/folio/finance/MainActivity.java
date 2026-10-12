@@ -1,8 +1,13 @@
 package com.folio.finance;
 
 import android.app.Activity;
+import android.Manifest;
 import android.content.ActivityNotFoundException;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import java.util.ArrayList;
 import android.content.ClipData;
 import android.net.Uri;
@@ -16,7 +21,6 @@ import org.json.JSONObject;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.graphics.Color;
-import android.os.Bundle;
 import android.provider.Settings;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -39,6 +43,10 @@ public final class MainActivity extends Activity {
     private View loadingOverlay;
     private boolean loaded;
     private static final int VOICE_REQUEST = 7609;
+    private static final int AUDIO_REQUEST = 7612;
+    private SpeechRecognizer speech;
+    private String pendingVoiceLocale;
+    private boolean voiceDelivered;
     private static final int CSV_IMPORT_REQUEST = 7610;
     private static final int JSON_IMPORT_REQUEST = 7611;
 
@@ -170,13 +178,122 @@ public final class MainActivity extends Activity {
         if (resultCode == RESULT_OK && data != null) {
             ArrayList<String> results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
             if (results != null && !results.isEmpty()) transcript = results.get(0);
-        } else if (resultCode != RESULT_CANCELED) error = "Speech was not recognized. Please type your request. Nothing was saved.";
+        } else if (resultCode != RESULT_CANCELED) error = "Speech was not recognized. Please type your request. Nothing was saved. / لم يتم التعرف على الكلام. يمكنك الكتابة. لم يُحفظ شيء.";
         deliverVoice(transcript, error);
     }
-    /** The system recognizer activity owns the microphone. Folio does not request RECORD_AUDIO. */
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, grantResults);
+        if (requestCode != AUDIO_REQUEST) return;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startOfflineRecognizer(pendingVoiceLocale);
+        } else {
+            deliverVoice("", micDeniedMessage());
+        }
+    }
+    /** The system speech screen is a separate app. Folio still has no INTERNET permission. */
     private boolean recognizerInstalled() {
         Intent probe = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         return probe.resolveActivity(getPackageManager()) != null;
+    }
+    private static String voiceLanguage(String locale) {
+        return "ar-EG".equals(locale) ? "ar-EG" : "en-US";
+    }
+    private Intent voiceIntent(String locale) {
+        String language = voiceLanguage(locale);
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language);
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak a transaction. Folio prefers on-device recognition.");
+        intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        return intent;
+    }
+    private static String micDeniedMessage() {
+        return "MIC_DENIED\nMicrophone permission is off. Allow the microphone for Folio in Android settings, then try voice again. Nothing was saved.\nإذن الميكروفون غير مفعّل. اسمح للميكروفون لتطبيق Folio من إعدادات أندرويد ثم أعد المحاولة. لم يُحفظ شيء.";
+    }
+    private static String offlinePackMessage() {
+        return "OFFLINE_PACK\nOffline speech pack not installed: install Arabic/English offline speech in Google settings. Open the Google app, then Settings, Voice, Offline speech recognition, and download Arabic (Egypt) and English. Folio has no internet permission, so this recognizer cannot download a pack or send audio. You can type, or open the system speech screen. That screen runs in another app and may send audio to its provider.\nحزمة النطق بدون إنترنت غير مثبّتة: ثبّت النطق بالعربية والإنجليزية من إعدادات Google. من تطبيق Google: الإعدادات، ثم الصوت، ثم التعرف على الكلام بدون إنترنت، ثم نزّل العربية (مصر) والإنجليزية. فوليو ليس لديه إذن إنترنت. لم يُحفظ شيء.";
+    }
+    private static String noRecognizerMessage() {
+        return "NO_RECOGNIZER\nNo speech recognizer is installed on this phone. Install the Google app, or type the transaction. Nothing was saved.\nلا يوجد مُتعرّف على الكلام على هذا الهاتف. يمكنك تثبيت تطبيق Google أو كتابة العملية. لم يُحفظ شيء.";
+    }
+    private void stopSpeech() {
+        if (speech == null) return;
+        try { speech.cancel(); } catch (RuntimeException ignored) {}
+        try { speech.destroy(); } catch (RuntimeException ignored) {}
+        speech = null;
+    }
+    private void startOfflineRecognizer(String locale) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingVoiceLocale = locale;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, AUDIO_REQUEST);
+            return;
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            deliverVoice("", recognizerInstalled() ? offlinePackMessage() : noRecognizerMessage());
+            return;
+        }
+        stopSpeech();
+        voiceDelivered = false;
+        try {
+            speech = SpeechRecognizer.createSpeechRecognizer(this);
+        } catch (RuntimeException e) {
+            speech = null;
+            deliverVoice("", offlinePackMessage());
+            return;
+        }
+        if (speech == null) {
+            deliverVoice("", offlinePackMessage());
+            return;
+        }
+        speech.setRecognitionListener(new RecognitionListener() {
+            @Override public void onReadyForSpeech(Bundle params) {}
+            @Override public void onBeginningOfSpeech() {}
+            @Override public void onRmsChanged(float rmsdB) {}
+            @Override public void onBufferReceived(byte[] buffer) {}
+            @Override public void onEndOfSpeech() {}
+            @Override public void onPartialResults(Bundle partial) {}
+            @Override public void onEvent(int eventType, Bundle params) {}
+            @Override public void onResults(Bundle results) {
+                if (voiceDelivered) return;
+                voiceDelivered = true;
+                ArrayList<String> heard = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                String transcript = heard == null || heard.isEmpty() || heard.get(0) == null ? "" : heard.get(0);
+                stopSpeech();
+                if (transcript.trim().isEmpty()) deliverVoice("", "Speech was not recognized. Please type your request. Nothing was saved. / لم يتم التعرف على الكلام. يمكنك الكتابة. لم يُحفظ شيء.");
+                else deliverVoice(transcript, "");
+            }
+            @Override public void onError(int code) {
+                if (voiceDelivered) return;
+                voiceDelivered = true;
+                stopSpeech();
+                deliverVoice("", voiceError(code));
+            }
+        });
+        try {
+            speech.startListening(voiceIntent(locale));
+        } catch (SecurityException e) {
+            voiceDelivered = true;
+            stopSpeech();
+            deliverVoice("", micDeniedMessage());
+        } catch (RuntimeException e) {
+            voiceDelivered = true;
+            stopSpeech();
+            deliverVoice("", offlinePackMessage());
+        }
+    }
+    private static String voiceError(int code) {
+        if (code == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) return micDeniedMessage();
+        if (code == SpeechRecognizer.ERROR_NETWORK || code == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
+                || code == SpeechRecognizer.ERROR_SERVER || code == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
+                || code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
+            return offlinePackMessage();
+        }
+        if (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+            return "Speech was not recognized. Please type your request. Nothing was saved. / لم يتم التعرف على الكلام. يمكنك الكتابة. لم يُحفظ شيء.";
+        }
+        return offlinePackMessage();
     }
     private void deliverVoice(String transcript, String error) {
         if (web == null) return;
@@ -190,6 +307,7 @@ public final class MainActivity extends Activity {
         else super.onBackPressed();
     }
     @Override protected void onDestroy() {
+        stopSpeech();
         if(web != null) { web.removeJavascriptInterface("FolioNative"); web.destroy(); }
         super.onDestroy();
     }
@@ -206,26 +324,21 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public void pickCsvFile() { runOnUiThread(() -> openImportPicker(CSV_IMPORT_REQUEST)); }
         @JavascriptInterface public void pickBackupFile() { runOnUiThread(() -> openImportPicker(JSON_IMPORT_REQUEST)); }
         @JavascriptInterface public void startVoiceRecognition(String locale) {
+            runOnUiThread(() -> startOfflineRecognizer(locale));
+        }
+        /** Fallback recognizer UI. It runs outside Folio, which still has no INTERNET permission. */
+        @JavascriptInterface public void startSystemVoiceRecognition(String locale) {
             runOnUiThread(() -> {
                 if (!recognizerInstalled()) {
-                    deliverVoice("", "Speech recognition is unavailable on this device. You can type instead. Nothing was saved.");
+                    deliverVoice("", noRecognizerMessage());
                     return;
                 }
                 try {
-                    String language = "ar-EG".equals(locale) ? "ar-EG" : "en-US";
-                    Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language);
-                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language);
-                    intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak a transaction. Folio prefers on-device recognition.");
-                    // A preference, not a guarantee. The sheet tells the user the recognizer may use the network.
-                    intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
-                    intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-                    startActivityForResult(intent, VOICE_REQUEST);
+                    startActivityForResult(voiceIntent(locale), VOICE_REQUEST);
                 } catch (ActivityNotFoundException e) {
-                    deliverVoice("", "Speech recognition is unavailable on this device. You can type instead. Nothing was saved.");
+                    deliverVoice("", noRecognizerMessage());
                 } catch (RuntimeException e) {
-                    deliverVoice("", "Speech recognition could not start. You can type instead. Nothing was saved.");
+                    deliverVoice("", "Speech recognition could not start. You can type instead. Nothing was saved. / تعذر بدء التعرف على الكلام. يمكنك الكتابة. لم يُحفظ شيء.");
                 }
             });
         }

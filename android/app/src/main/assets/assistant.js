@@ -1213,8 +1213,8 @@
     if (result.unconfirmed_transactions && result.unconfirmed_transactions.length) {
       var pendingCount = typeof result.unconfirmed_count === 'number' ? result.unconfirmed_count : result.unconfirmed_transactions.length;
       text += ar
-        ? ' فيه ' + pendingCount + ' عملية محتاجة مراجعة؛ الإشعارات اللي مش مؤكدة مش بنعتبرها دخل أو مصروف نهائي.'
-        : ' Unconfirmed notification transactions (' + pendingCount + ') are excluded from that number.';
+        ? ' فيه ' + pendingCount + ' عملية لسه محتاجة مراجعة ومش محسوبة. الإشعار اللي اتأكد لوحده محسوب في الرقم.'
+        : ' Notifications waiting for review (' + pendingCount + ') are excluded from that number. An auto-confirmed alert is already included.';
       if (typeof result.unconfirmed_net_minor === 'number') {
         text += ar
           ? ' صافيها لوحده ' + spokenAmount(result.unconfirmed_net_minor, result.currency, 'ar') + '.'
