@@ -1352,7 +1352,7 @@
     }
     if (parsed.intent === 'savings_goal') {
       if (money == null) return 'How much do you want the savings goal to be? This does not move money.';
-      return 'I can store a savings goal of ' + money + (parsed.category ? ' for ' + parsed.category : '') + '. This does not move money. Confirm before anything is saved. The current applyDraft handler does not persist savingsGoal until that branch is added.';
+      return 'I can store a savings goal of ' + money + (parsed.category ? ' for ' + parsed.category : '') + '. This does not move money. Confirm before anything is saved.';
     }
     return 'Confirm before anything is saved.';
   }

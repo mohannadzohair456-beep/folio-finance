@@ -4,7 +4,7 @@ The assistant is a deterministic local rules engine. It does not call a network,
 
 The implementation lives in `android/app/src/main/assets/assistant.js`. Load it in the WebView as a classic script. It exports `window.FolioAssistant` and, under Node, `module.exports`.
 
-This file is not wired into `index.html` or `folio-v2.js`. Those files are the integration points below.
+`index.html` inlines this file ahead of `folio-v2.js` so the strict page CSP can run it. `submitText` calls `FolioAssistant.planCommand`.
 
 ## Function to swap
 
@@ -50,9 +50,11 @@ Optional swaps, same signatures as today:
 | `categoryBudget` | `state.budgets[currency][category]` | `action.amount` in **major** units, matching `saveBudget` |
 | `expense` / `income` | push a transaction | `action.amountMinor` |
 
-`categoryBudget` also carries `amountMinor` for a future writer. The current `applyDraft` line `currentBudgets()[a.category] = a.amount` must keep using `amount`.
+`categoryBudget` also carries `amountMinor`. Schema 1 stores category budgets as integer minor units, so `applyDraft` writes `amountMinor` (or `amount * 100` when only the major field is present). It must not store `amount` directly.
 
-`savings_goal` sets `needs_confirmation` and `proposal.type = 'savingsGoal'`, and leaves `action` undefined. The confirm card therefore does not appear, and `applyDraft` cannot report a save it did not make. To persist a goal, add a branch that stores `proposal.amountMinor` before `persist()`, and teach `submitText` to open the review card for `proposal` when `action` is absent. Do not fall through to `persist()` for an unknown `action.type`.
+The page passes `categoryBudgetsMinor` copied from `state.budgets[state.currency]` into `planCommand`. The engine reads that map as minor units. The legacy `budgets` map is still major units inside the engine, and passing the schema 1 map there would multiply every cap by 100.
+
+`savings_goal` sets `needs_confirmation` and `proposal.type = 'savingsGoal'`, and leaves `action` undefined. `submitText` opens the review card for that proposal. `applyDraft` stores `savingsGoalMinor`, `savingsGoalCurrency`, and `savingsGoalCategory`. It does not create a transaction. An unknown `action.type` does not call `persist()`.
 
 Transaction writes in `applyDraft` currently force `currency: state.currency`. Copy `action.currency` instead. `planCommand` already withholds `action` when the utterance names a currency other than `state.currency`, so a blind swap cannot file USD under an EGP ledger. There is no conversion either way.
 
@@ -186,7 +188,7 @@ Deliberate differences from the first `planCommand`, so a swap does not keep the
 - Month boundaries use `state.now` and a fixed `timeZone`. There is no IANA database and no device-local `Date`. Pass `+02:00` for Egypt. Omitting the zone assumes UTC and lists `time_zone` when that zone actually changed a total.
 - `كريم` maps to Transport because that is the Arabic spelling of Careem.
 - Category `Other` on an expense with no topic is the same explicit bucket as today's `categoryFrom`, not a guessed merchant. Two known categories refuse the sentence.
-- Savings goals are not stored until `applyDraft` grows a `savingsGoal` branch.
+- A confirmed savings goal is stored on the workspace. It does not move money or create a transaction.
 - AED, EUR, and GBP are ledger currencies only. Speech in those names is not classified.
 - Full Modern Standard Arabic grammar and free-form number sentences outside the listed patterns return `unknown`.
 - A transaction dated before the snapshot is excluded from cash and still counts in this month's category totals.

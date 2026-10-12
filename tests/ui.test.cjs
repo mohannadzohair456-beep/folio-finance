@@ -99,7 +99,7 @@ function inlined(name){
   assert.ok(i>=0&&j>i,'missing inline '+name);
   return h.slice(i+start.length,j).trim();
 }
-for (const name of ['folio-data.js','folio-v2.js','folio-v2.css']) {
+for (const name of ['folio-data.js','assistant.js','folio-v2.js','folio-v2.css']) {
   assert.equal(inlined(name), fs.readFileSync('android/app/src/main/assets/'+name,'utf8').trim(), name+' bundled into the page');
 }
 assert.equal(fs.readFileSync('android/app/src/main/res/values/strings.xml','utf8').includes('>Folio<'), true);

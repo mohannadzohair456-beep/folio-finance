@@ -36,7 +36,7 @@ The first time schema 0 (or a demo workspace) is opened, Folio writes `localStor
 
 `FolioData.buildBackup` copies the whole workspace and adds `folioBackup: 1` plus `exportedAt`. Restore accepts that envelope or a raw saved state object. It runs the same migration, so an old unversioned backup converts budgets once.
 
-The round trip includes transactions, per-currency category budgets, reported balance and its timestamp, expected salary (`monthlyIncomeMinor`), the monthly spending target, currency, capture flag, source allowlist, onboarding (`v2Onboarded`), legacy leftovers, and any extra JSON fields that were stored.
+The round trip includes transactions, per-currency category budgets, reported balance and its timestamp, expected salary (`monthlyIncomeMinor`), the monthly spending target, a confirmed savings goal (`savingsGoalMinor`, `savingsGoalCurrency`, `savingsGoalCategory`), currency, capture flag, source allowlist, onboarding (`v2Onboarded`), legacy leftovers, and any extra JSON fields that were stored. A savings goal is not a transaction and is not added into totals.
 
 CSV import only adds transactions. It does not replace balances or budgets. That is deliberate: the old `com.folio.finance` build can only export CSV.
 

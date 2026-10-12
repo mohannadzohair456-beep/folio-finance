@@ -105,11 +105,25 @@
     dialogue.push({kind,text:String(text).slice(0,1200)});
     if(dialogue.length>20)dialogue=dialogue.slice(-20);
   }
+  function assistantLedger(){
+    const view=Object.assign({},state);
+    const table=state.budgets&&state.budgets[state.currency];
+    if(table&&typeof table==='object'&&!Array.isArray(table))view.categoryBudgetsMinor=Object.assign({},table);
+    view.now=Date.now();
+    const offsetMin=-new Date().getTimezoneOffset();
+    const sign=offsetMin<0?'-':'+';
+    const abs=Math.abs(offsetMin);
+    view.timeZone=sign+String(Math.floor(abs/60)).padStart(2,'0')+':'+String(abs%60).padStart(2,'0');
+    return view;
+  }
   function submitText(){
     const el=$('folio-assistant-input');if(!el)return;
     const t=el.value.trim();if(!t)return;
-    message(t,'user');const result=planCommand(t);message(result.answer);
-    draft=result.action||null;render();
+    message(t,'user');
+    const result=window.FolioAssistant?FolioAssistant.planCommand(t,assistantLedger()):planCommand(t);
+    message(result.answer);
+    draft=result.action||(result.proposal&&result.proposal.type==='savingsGoal'?result.proposal:null);
+    render();
     const box=$('assistant-chat');if(box)box.scrollTop=box.scrollHeight;
   }
   function sendExample(t){const el=$('folio-assistant-input');if(el){el.value=t;submitText();}}
@@ -121,8 +135,17 @@
     else if(a.type==='budget')state.monthlyBudgetMinor=a.amountMinor;
     else if(a.type==='categoryBudget'){const minor=Number.isFinite(Number(a.amountMinor))?Math.round(Number(a.amountMinor)):Math.round(Number(a.amount)*100);currentBudgets()[a.category]=minor;}
     else if(a.type==='expense'||a.type==='income'){
-      state.transactions.push({id:'assistant-'+timestamp+'-'+Math.random().toString(36).slice(2,7),amountMinor:a.amountMinor,currency:state.currency,direction:a.type,merchant:a.merchant,category:a.category,occurredAt:timestamp,source:'assistant'});
+      state.transactions.push({id:'assistant-'+timestamp+'-'+Math.random().toString(36).slice(2,7),amountMinor:a.amountMinor,currency:a.currency||state.currency,direction:a.type,merchant:a.merchant,category:a.category,occurredAt:timestamp,source:'assistant'});
     }
+    else if(a.type==='savingsGoal'){
+      const minor=Math.round(Number(a.amountMinor));
+      if(!Number.isSafeInteger(minor)||minor<0||minor>10000000000){message('That savings goal is not a valid amount.');render();return;}
+      state.savingsGoalMinor=minor;
+      state.savingsGoalCurrency=a.currency||state.currency;
+      if(a.category)state.savingsGoalCategory=a.category;
+      else delete state.savingsGoalCategory;
+    }
+    else{message('That change is not something Folio can save.');render();return;}
     if(persist())message('Saved. You can review and edit this information in your financial workspace.');
     render();
   }
@@ -207,7 +230,8 @@
   }
   function assistantPage(){
     const stats=financeSummary();
-    const snapshots=`<div class="v2-snapshots"><div><span>Available estimate</span><strong>${stats.balance===null?'Not set':money(stats.balance)}</strong></div><div><span>Monthly budget left</span><strong>${stats.remaining===null?'Not set':money(stats.remaining)}</strong></div><div><span>Expected income</span><strong>${state.monthlyIncomeMinor?money(state.monthlyIncomeMinor):'Not set'}</strong></div></div>`;
+    const goalLine=Number.isFinite(Number(state.savingsGoalMinor))?`<p class="v2-disclaimer">Savings goal: ${money(state.savingsGoalMinor)}${state.savingsGoalCategory?' for '+h(state.savingsGoalCategory):''}. This does not move money.</p>`:'';
+    const snapshots=`<div class="v2-snapshots"><div><span>Available estimate</span><strong>${stats.balance===null?'Not set':money(stats.balance)}</strong></div><div><span>Monthly budget left</span><strong>${stats.remaining===null?'Not set':money(stats.remaining)}</strong></div><div><span>Expected income</span><strong>${state.monthlyIncomeMinor?money(state.monthlyIncomeMinor):'Not set'}</strong></div></div>${goalLine}`;
     const chat=`<div class="v2-chat" id="assistant-chat" role="log" aria-live="polite">${dialogue.length?dialogue.map(m=>`<div class="v2-bubble ${m.kind==='user'?'mine':'folio'}">${h(m.text)}</div>`).join(''):`<div class="v2-bubble folio">Hi! I'm Folio, your local financial planning assistant. ${h(speechHint())}</div>`}</div>`;
     return `${heading('FINANCIAL COMPANION','Ask Folio','Simple, transparent planning. You approve every change to your records.')}
       <div class="v2-assistant">${snapshots}

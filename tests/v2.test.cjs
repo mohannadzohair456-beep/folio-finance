@@ -41,6 +41,17 @@ assert.equal(v.planCommand('budget for food is 250').action.amountMinor,25000,'c
 doc.getElementById('folio-assistant-input').value='budget for food is 250';
 vm.runInContext('FolioV2.submitText();FolioV2.applyDraft()',context);
 assert.equal(JSON.parse(storage.get('folio_finance_v1')).budgets.EGP['Food & drinks'],25000,'category budget stored in minor units');
+new vm.Script(fs.readFileSync('android/app/src/main/assets/assistant.js','utf8')).runInContext(context);
+doc.getElementById('folio-assistant-input').value='I want to save 20k';
+vm.runInContext('FolioV2.submitText();FolioV2.applyDraft()',context);
+const afterGoal=JSON.parse(storage.get('folio_finance_v1'));
+assert.equal(afterGoal.savingsGoalMinor,2000000,'confirmed savings goal is stored in minor units');
+assert.equal(afterGoal.savingsGoalCurrency,'EGP');
+assert.equal(afterGoal.transactions.length,1,'a savings goal does not create a transaction');
+assert.ok(doc.getElementById('root').innerHTML.includes('Savings goal'),'the assistant page shows the saved goal');
+doc.getElementById('folio-assistant-input').value='budget for food is 250';
+vm.runInContext('FolioV2.submitText();FolioV2.applyDraft()',context);
+assert.equal(JSON.parse(storage.get('folio_finance_v1')).budgets.EGP['Food & drinks'],25000,'engine category budgets stay minor units');
 assert.ok(!html.includes('demoNotice()}'+ '$'+'{trackingPanel()}<div class="metrics">'),'Tracking diagnostics removed from home');
 const gradle=fs.readFileSync('android/app/build.gradle','utf8');
 const manifest=fs.readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
