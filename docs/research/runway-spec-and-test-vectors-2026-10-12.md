@@ -175,4 +175,11 @@ OR
 3. Investigate mismatches: currency scope, status review, settled-but-unlinked obligations, paid vs unpaid, reservations overlap, net internal transfers, credit settlement, payout receipt, negative rounding, Cairo DST and stale source data. Record dissent and proposed policy explicitly in FOL-107.
 4. Keep feature off by default, P0 regression first, no application code edits in this FOL-105 task. Unit passing ≠ real-world forecast accuracy or H1 validation.
 
+## 6. Deliberate deviations (owner, 2026-10-12)
+
+The vectors above stay the independent oracle. The shipped engine follows them, including a 48-hour stale balance, insufficient data when payday is today, future confirmed transactions excluded from available now, a bill due on payday included, floor division for a negative per-day amount, and a bill marked paid after the snapshot with no matching debit flagged instead of treated as cash already spent. Two behaviors are intentional exceptions:
+
+1. **Unconfirmed notifications (V06).** A pending notification after the snapshot does not fail the estimate closed. The engine returns the confirmed-only number, keeps that notification out of the total, and reports `unconfirmed_count` plus `unconfirmed_net_minor` so the warning can name how many are still pending. Rejected rows stay out of both the number and that net.
+2. **Other currencies (V28).** A transaction in another currency is not converted and is not a block. It is omitted from this currency's available-now figure and listed under `excluded` with reason `other_currency`. A bill denominated in another currency is still insufficient data, because subtracting it would mix currencies.
+
 **Research integrity:** No fabricated user feedback, statistics, adoption numbers or measurements. All safety thresholds and product-policy choices identified as **ASSUMPTIONS**.
