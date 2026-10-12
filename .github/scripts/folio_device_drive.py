@@ -34,6 +34,29 @@ def is_control_label(text, needle):
     return normalized_label(text) == normalized_label(needle)
 
 
+def is_blur_target(text):
+    """A non-input label that releases focus without closing a dialog.
+
+    The left screen edge is the modal overlay. Tapping it dismisses
+    New transaction. The wordmark and the dialog title sit inside the page.
+    """
+    raw = " ".join(str(text).split()).lower()
+    if raw in {"◈ folio.", "folio.", "folio"} or raw.startswith("◈ folio"):
+        return True
+    label = normalized_label(text)
+    for wanted in (
+        "make it yours",
+        "new transaction",
+        "edit transaction",
+        "set monthly budget",
+        "edit budget",
+        "your financial starting point",
+    ):
+        if wanted in label:
+            return True
+    return False
+
+
 def field_holds(text, value):
     """True when an EditText shows value, or does not expose a number.
 
@@ -499,15 +522,29 @@ class Driver:
         return "mInputShown=true" in (result.stdout or "")
 
     def blur_inputs(self):
-        """Tap the wordmark band so the focused editor releases the keyboard.
+        """Release the focused editor without tapping a dialog overlay.
 
         Re-enabling the IME while the balance field stays focused opens the
-        number pad again, and the next tap inserts a digit into that field.
+        number pad again. A gutter tap does that, and it also hits the
+        transaction sheet's backdrop, which closes the form.
         """
-        # Inputs start at x=42. The left gutter is not a field, even when the
-        # number pad has scrolled the form.
-        x = 8
-        y = int(self.height * 0.4)
+        nodes = self.dump_nodes()
+        targets = [
+            node for node in nodes
+            if node["text"] and self.visible(node)
+            and not node["class"].endswith("EditText")
+            and not node["class"].endswith("Button")
+            and is_blur_target(node["text"])
+        ]
+        if targets:
+            targets.sort(key=lambda node: node["cy"])
+            self.tap_node(targets[0])
+            return
+        if any(is_control_label(node["text"], "Close") for node in nodes):
+            print("keyboard open over a dialog, not tapping the overlay", flush=True)
+            return
+        x = self.width // 2
+        y = max(90, int(self.height * 0.08))
         print(f"blur tap {x},{y}", flush=True)
         self.shell(f"input tap {x} {y}")
         time.sleep(0.4)
@@ -538,6 +575,24 @@ class Driver:
         self.shell("ime enable " + ident, check=False)
         time.sleep(0.5)
 
+    def dismiss_anr(self, blob):
+        """Clear a system ANR that covers Folio.
+
+        API 35 once showed Pixel Launcher isn't responding over the first
+        paint, so Meet Folio never entered the accessibility tree. Wait is
+        tapped first. A launcher ANR is also force-stopped, then Folio is
+        brought forward without killing its process.
+        """
+        print("dismiss anr", flush=True)
+        self.tap_text("Wait", scrolls=0)
+        if "launcher" not in blob.lower():
+            return
+        for pkg in ("com.google.android.apps.nexuslauncher", "com.android.launcher3"):
+            self.shell("am force-stop " + pkg, check=False)
+        time.sleep(0.4)
+        self.adb("shell", "am", "start", "-n", ACTIVITY)
+        time.sleep(1)
+
     def wait_for(self, needle, timeout=45, forbid=()):
         deadline = time.time() + timeout
         last = ""
@@ -547,7 +602,7 @@ class Driver:
             if self.candidates(nodes, needle, forbid):
                 return nodes
             if "isn't responding" in last or "not responding" in last.lower():
-                self.tap_text("Wait", scrolls=0)
+                self.dismiss_anr(last)
             time.sleep(1)
         self.save_text("wait-failed.txt", last)
         raise DriveError("timed out waiting for " + needle)
@@ -985,6 +1040,16 @@ Complete
     shell = webview_shell()
     if "am start -W -n" not in shell or "Meet Folio" not in shell:
         raise DriveError("webview shell incomplete")
+    if not is_blur_target("◈ folio."):
+        raise DriveError("wordmark should blur focus")
+    if not is_blur_target("New transaction"):
+        raise DriveError("dialog title should blur focus")
+    if is_blur_target("Meet Folio."):
+        raise DriveError("onboarding title should not be a blur target")
+    if is_blur_target("Open Folio"):
+        raise DriveError("Open Folio should not be a blur target")
+    if is_blur_target("Add transaction"):
+        raise DriveError("Add transaction should not be a blur target")
     if not field_holds("8420.50, Current available balance (EGP)", "8420.50"):
         raise DriveError("field_holds rejected a clean balance")
     if not field_holds("8420.5, Current available balance (EGP)", "8420.50"):
@@ -1029,7 +1094,7 @@ def upgrade(driver, old_apk, new_apk, expect_old="0.2.33"):
     if name != expect_old:
         raise DriveError("expected " + expect_old + ", installed " + name)
     driver.launch()
-    driver.wait_for("Meet Folio", timeout=50)
+    driver.wait_for("Meet Folio", timeout=70)
     driver.shot("onboarding")
     if not driver.tap_text("Continue", forbid=("Android",)):
         raise DriveError("could not tap onboarding Continue")
