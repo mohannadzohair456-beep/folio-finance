@@ -22,7 +22,7 @@ A v0.2.33 workspace can omit `transactions` and still keep its budgets and repor
 
 ## Pre-migration snapshot
 
-The first time schema 0 (or a demo workspace) is opened, Folio writes `localStorage['folio_finance_premigration_snapshot']` if that key is empty. The value is:
+The first time an older workspace is opened, Folio writes `localStorage['folio_finance_premigration_snapshot']` if that key is empty. That includes schema 0, a demo workspace, and a schema 1 workspace opened by schema 2. The value is:
 
 ```json
 {
@@ -33,7 +33,7 @@ The first time schema 0 (or a demo workspace) is opened, Folio writes `localStor
 }
 ```
 
-`state` is the object from before conversion. Later launches do not overwrite it. A JSON restore writes a separate `folio_finance_pre_restore_snapshot` and does not touch the pre-migration snapshot.
+`state` is the object from before conversion. `toSchema` is the schema being migrated to. Later launches do not overwrite the key, so a snapshot taken on the way from schema 0 to schema 1 is still there after schema 2 opens. A JSON restore writes a separate `folio_finance_pre_restore_snapshot` and does not touch the pre-migration snapshot.
 
 ## JSON backup
 

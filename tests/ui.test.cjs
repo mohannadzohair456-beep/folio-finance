@@ -15,8 +15,9 @@ assert.ok(h.includes("connect-src 'none'"),'CSP blocks network requests');
 assert.ok(h.includes('if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}'),'Live notifications should refresh');
 
 // Execute the actual bundled application with a minimal WebView-like browser mock.
-function boot(seed){
+function boot(seed, extra){
  const data=new Map(seed?[['folio_finance_v1',JSON.stringify(seed)]]:[]);
+ if(extra){ for(const [key,value] of Object.entries(extra)) data.set(key, value); }
  const nodes=new Map();
  const doc={getElementById(id){if(!nodes.has(id))nodes.set(id,{innerHTML:'',value:'',focus(){}});return nodes.get(id);}};
  const localStorage={getItem:k=>data.get(k)||null,setItem:(k,v)=>data.set(k,String(v))};
@@ -218,5 +219,55 @@ assert.equal(editedRow.merchant, 'Talabat edited');
 assert.equal(editedRow.status, 'confirmed');
 assert.equal(editedRow.source, 'notification');
 assert.equal(editedRow.amountMinor, 4500);
+
+const priorSnapshot=JSON.stringify({folioSnapshot:'premigration',fromSchema:0,toSchema:1,state:{marker:'schema0',budgets:{EGP:{Shopping:3500}}}});
+const keptSnapshot=boot({
+  schemaVersion:1,
+  currency:'EGP',
+  v2Onboarded:true,
+  budgets:{EGP:{Shopping:4000}},
+  transactions:[{id:'keep',source:'manual',currency:'EGP',direction:'expense',amountMinor:12550,merchant:'Carrefour',category:'Food & drinks',occurredAt:Date.now()}]
+},{folio_finance_premigration_snapshot:priorSnapshot});
+assert.equal(keptSnapshot.data.get('folio_finance_premigration_snapshot'), priorSnapshot, 'schema 2 does not replace a snapshot taken earlier');
+const keptState=JSON.parse(keptSnapshot.data.get('folio_finance_v1'));
+assert.equal(keptState.schemaVersion, 2);
+assert.equal(keptState.budgets.EGP.Shopping, 4000, 'schema 1 budgets stay minor units');
+assert.equal(keptState.transactions[0].status, 'confirmed');
+assert.equal(keptState.transactions[0].merchant, 'Carrefour');
+
+const schema1=boot({
+  schemaVersion:1,
+  currency:'EGP',
+  v2Onboarded:true,
+  budgets:{EGP:{Shopping:2500}},
+  transactions:[{id:'market',source:'notification',review:true,currency:'EGP',direction:'expense',amountMinor:4500,merchant:'Talabat',category:'Food & drinks',occurredAt:Date.now()}]
+});
+const written=schema1.data.get('folio_finance_premigration_snapshot');
+const writtenSnapshot=JSON.parse(written);
+assert.equal(writtenSnapshot.folioSnapshot, 'premigration');
+assert.equal(writtenSnapshot.fromSchema, 1);
+assert.equal(writtenSnapshot.toSchema, 2);
+assert.equal(writtenSnapshot.state.schemaVersion, 1);
+assert.equal(writtenSnapshot.state.budgets.EGP.Shopping, 2500, 'the snapshot keeps the pre-migration budget');
+assert.equal(writtenSnapshot.state.transactions[0].review, true);
+assert.equal(writtenSnapshot.state.transactions[0].status, undefined);
+assert.equal(JSON.parse(schema1.data.get('folio_finance_v1')).transactions[0].status, 'suggested');
+const second=boot(JSON.parse(schema1.data.get('folio_finance_v1')),{folio_finance_premigration_snapshot:written});
+assert.equal(second.data.get('folio_finance_premigration_snapshot'), written, 'a second launch leaves the snapshot alone');
+
+for (const name of ['folio-data.js','assistant.js','payday-runway.js','folio-v2.js']) {
+  const source=fs.readFileSync('android/app/src/main/assets/'+name,'utf8');
+  assert.equal(source.includes('?.'), false, name+' is parsed by the Android 8 WebView, so it cannot use optional chaining');
+  assert.equal(source.includes('??'), false, name+' is parsed by the Android 8 WebView, so it cannot use nullish coalescing');
+}
+assert.equal(h.includes('?.'), false, 'bundled page cannot use optional chaining');
+assert.equal(h.includes('??'), false, 'bundled page cannot use nullish coalescing');
+
+const upgradeYml=fs.readFileSync('.github/workflows/folio-device-upgrade.yml','utf8');
+const upgradeDriver=fs.readFileSync('.github/scripts/folio_device_drive.py','utf8');
+assert.ok(upgradeYml.includes('releases/download/v0.2.33/app-release.apk'), 'v0.2.33 upgrade stays');
+assert.ok(upgradeYml.includes('releases/download/v0.3.46/app-release.apk'), 'schema 1 upgrade uses the published v0.3.46 APK');
+assert.ok(upgradeYml.includes('--expect-old 0.3.46'), 'schema 1 upgrade checks the installed version');
+assert.ok(upgradeDriver.includes('expect_old'), 'the driver can expect a version other than v0.2.33');
 
 console.log('PASS bundled interface and tracking setup checks');
