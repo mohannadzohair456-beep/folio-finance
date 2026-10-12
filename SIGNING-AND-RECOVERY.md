@@ -1,17 +1,17 @@
 # Folio Android Update and Data-Recovery Guide
 
-## Safer migration: install Folio New alongside the old Folio
+## Safer migration: install the permanent Folio app alongside the old Folio
 
 As of the side-by-side migration release, the permanent signed Folio Android application ID is **`com.folio.finance.app`**. Older debug test builds use **`com.folio.finance`**. Android therefore treats them as separate applications, and they can coexist on the same phone.
 
 **DO NOT uninstall the old version first.** Keep the old Folio installed and follow this order:
 
-1. Download and install the newest **signed** `app-release.apk` from the [latest Folio GitHub release](https://github.com/mohannadzohair456-beep/folio-finance/releases/latest). It initially appears as **Folio New** to distinguish it from the older Folio app.
-2. Open the older **Folio** and use **Transactions → Export CSV**. Keep a private copy of the transaction export.
-3. Open **Folio New** and finish onboarding. In **Transactions → Import CSV**, select the saved `.csv` file. Verify the amounts, dates and counts.
-4. Copy any manually entered balances, expected income, budgets, notification sources and settings not covered by the CSV. The CSV currently contains only transaction history, not a full app backup.
+1. Download and install the newest **signed** `app-release.apk` from the [latest Folio GitHub release](https://github.com/mohannadzohair456-beep/folio-finance/releases/latest). The launcher name is **Folio**.
+2. Open the older **Folio** and use **Transactions → Export CSV**. Keep a private copy of the transaction export. That older build cannot export balances, budgets or settings.
+3. Open **Folio** (`com.folio.finance.app`) and finish onboarding. In **Transactions → Import CSV**, select the saved `.csv` file. Verify the amounts, dates and counts.
+4. Re-enter balances, expected income, budgets and allowlists that the old CSV does not contain. After that, use **Settings → Export JSON** for a full backup. See [docs/release/data-migration.md](docs/release/data-migration.md).
 5. **Only after verifying the new app** may you uninstall the old test Folio. Keeping the old installation until then is safe.
-6. For future Folio updates, install the latest signed `app-release.apk` **over Folio New**. The application ID and signing certificate will remain stable.
+6. For future Folio updates, install the latest signed `app-release.apk` **over the permanent Folio app**. The application ID and signing certificate will remain stable. The launcher name is Folio, not "Folio New".
 
 Do not try to install releases tagged `v0.2.32` or old `folio-test-*` as updates to the new package: they use the legacy ID and/or debug signatures. Side-by-side migration is **a one-time new app installation**, not an in-place update of old data. It avoids deleting the old data before you verify recovery.
 
