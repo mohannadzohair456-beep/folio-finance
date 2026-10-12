@@ -27,6 +27,27 @@
     return m?numberValue(m[0]):null;
   }
   const moneyMinor=n=>Math.round(n*100);
+  function escapeNote(value){
+    return String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function enteredBalanceNote(){
+    const now=Date.now();
+    const record={balanceMinor:state.reportedBalanceMinor,balanceReportedAt:state.balanceReportedAt,currency:state.currency,balanceUntracked:state.balanceUntracked===true};
+    const fresh=window.FolioData?FolioData.balanceFreshness(record, now):'unknown';
+    const moved=window.FolioData?FolioData.untrackedMovement(record, state.transactions):false;
+    let label='Entered balance time is unknown';
+    if(fresh==='fresh')label='Entered balance is current';
+    if(fresh==='stale')label='Entered balance is stale';
+    let text=label+'.'+(moved?' Untracked movements are not in this figure.':'')+' Not a bank balance.';
+    const accounts=Array.isArray(state.accounts)?state.accounts:[];
+    for(let i=0;i<accounts.length;i++){
+      const account=accounts[i];
+      const accountFresh=window.FolioData?FolioData.balanceFreshness(account, now):'unknown';
+      const accountMoved=window.FolioData?FolioData.untrackedMovement(account, state.transactions):false;
+      text+=' '+escapeNote(account.name||account.type||'Account')+' '+accountFresh+(accountMoved?' · untracked':'')+'.';
+    }
+    return text;
+  }
   function estimatedBalance(){
     if(!Number.isFinite(state.reportedBalanceMinor)||!state.balanceReportedAt)return null;
     let delta=0;
@@ -259,7 +280,7 @@
   function assistantPage(){
     const stats=financeSummary();
     const goalLine=Number.isFinite(Number(state.savingsGoalMinor))?`<p class="v2-disclaimer">Savings goal: ${money(state.savingsGoalMinor)}${state.savingsGoalCategory?' for '+h(state.savingsGoalCategory):''}. This does not move money.</p>`:'';
-    const snapshots=`<div class="v2-snapshots"><div><span>Available estimate</span><strong>${stats.balance===null?'Not set':money(stats.balance)}</strong></div><div><span>Monthly budget left</span><strong>${stats.remaining===null?'Not set':money(stats.remaining)}</strong></div><div><span>Expected income</span><strong>${state.monthlyIncomeMinor?money(state.monthlyIncomeMinor):'Not set'}</strong></div></div>${goalLine}`;
+    const snapshots=`<div class="v2-snapshots"><div><span>Available estimate</span><strong>${stats.balance===null?'Not set':money(stats.balance)}</strong></div><div><span>Monthly budget left</span><strong>${stats.remaining===null?'Not set':money(stats.remaining)}</strong></div><div><span>Expected income</span><strong>${state.monthlyIncomeMinor?money(state.monthlyIncomeMinor):'Not set'}</strong></div></div><p class="v2-balance-note">${enteredBalanceNote()}</p>${goalLine}`;
     const chat=`<div class="v2-chat" id="assistant-chat" role="log" aria-live="polite">${dialogue.length?dialogue.map(m=>`<div class="v2-bubble ${m.kind==='user'?'mine':'folio'}">${h(m.text)}</div>`).join(''):`<div class="v2-bubble folio">Hi! I'm Folio, your local financial planning assistant. ${h(speechHint())}</div>`}</div>`;
     return `${heading('FINANCIAL COMPANION','Ask Folio','Simple, transparent planning. You approve every change to your records.')}
       <div class="v2-assistant">${snapshots}
@@ -291,7 +312,7 @@
   state.monthlyIncomeMinor=Number(state.monthlyIncomeMinor)||0;
   if(!Number.isFinite(state.reportedBalanceMinor))state.reportedBalanceMinor=null;
   if(!Number.isFinite(state.balanceReportedAt))state.balanceReportedAt=null;
-  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,financeSummary,voiceNetworkNotice};
+  window.FolioV2={render,onbHtml,assistantPage,submitText,sendExample,planCommand,detectAmount,numberValue,applyDraft,cancelDraft,nextStep,previousStep,markReady,optInCapture,requestVoice,closeSheet,beginVoice,onVoiceResult,chooseLocale,currentVoiceLocale,explainAccess,estimatedBalance,enteredBalanceNote,financeSummary,voiceNetworkNotice};
   window.folioGoHome=()=>{if(!state.v2Onboarded){previousStep();return;}onNav('overview');};
   render();
 })();

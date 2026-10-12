@@ -52,6 +52,8 @@ Later main builds publish as prereleases and do not replace `releases/latest`. T
 
 Ask Folio no longer opens an affordability reply with Yes or No, and it no longer calls a locally reconciled figure a verified balance. A purchase is described as an estimated remaining amount from data the user entered, with an explicit line that the estimate is not approval and not a guarantee. Month-end projection says planned income is not money available now. A question in Arabic script, or in common Arabizi such as `a2dar ashtary`, is answered in Egyptian Arabic with Western digits. English questions stay in English. The numbers and the refusal to mix currencies are unchanged.
 
+The signed build of `c2fa9b6` published v0.3.63: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38255601130. Both device upgrade paths passed, and the workflow promoted that tag to latest: https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38255726069.
+
 ## FOL-108 — v0.2.33 on Android 8 does not render (12 Oct 2026)
 
 GitHub run [38248427070](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38248427070) on `44a095c`, job `upgrade-from-v0233 (26)`.
@@ -65,6 +67,10 @@ API 34 in the same run completed `UPGRADE_DATA_SURVIVED`. API 35 filled 8420.50,
 Cold-start TotalTime for signed v0.3.43 is recorded by `cold-launch-latency` on API 26, 34, and 35. No latency number from run 38248427070 is copied forward, because that run's API 34 and API 35 samples were not accepted by the older parser.
 
 Run [38255733542](https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38255733542) on head `a981ac3` (checkout merge `61b8b289`) is the baseline. `latency.txt` TotalTime medians for v0.3.43 are 923 ms on API 26, 1455 ms on API 34, and 2188 ms on API 35. API 34's content poll printed `LATENCY_WEBVIEW_CONTENT_FAILED` and has no content time. `v0233-page-on-api26` printed `V0233_UI_BLANK 0.2.33 33 sdk 26`. `upgrade-from-v0233` on API 34 and API 35 printed `UPGRADE_DATA_SURVIVED 0.3.61 161`. `clean-launch` on API 26 and API 35 printed `LAUNCH_OK 0.3.61 161`. The figures and the runner image `ubuntu24` `20261004.327.1` are in `docs/operations/performance-baseline.md`. A green API 26 blank job is not a data-survival pass.
+
+## Update — 12 Oct 2026, balance freshness
+
+Each account can store a user-confirmed `balanceMinor`, `asOf`, currency, and an untracked flag. The page says whether that balance is current, stale (older than 7 days), or unknown, and it says when a later notification was not folded into the figure. Notification rows do not change the entered balance, and a CSV import does not create account balances. Schema stays 2.
 
 ## Not done
 
