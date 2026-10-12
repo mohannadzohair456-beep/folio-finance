@@ -1,6 +1,8 @@
 # Handoff — 12 Oct 2026
 
-`main` is at the v0.3.40 release commit `67492f9459bc0fe1ada03f7a533a1a1370471957`, plus any docs-only commits after it. The signed APK is the GitHub release [Folio v0.3.40](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.40). Pull requests [#1](https://github.com/mohannadzohair456-beep/folio-finance/pull/1), [#2](https://github.com/mohannadzohair456-beep/folio-finance/pull/2), and [#3](https://github.com/mohannadzohair456-beep/folio-finance/pull/3) are merged. There are no open GitHub issues.
+`main` tip is `2ea93ab96753b647c1913929cb734ee53ee7590e` (`2ea93ab`, API 35 balance-step blur and withhold `always()`). `releases/latest` is [v0.3.63](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.63). [v0.3.66](https://github.com/mohannadzohair456-beep/folio-finance/releases/tag/v0.3.66) is still a prerelease. Device run https://github.com/mohannadzohair456-beep/folio-finance/actions/runs/38267555452 tested that tag on this tip: schema-1 and v0.2.33 on API 34 printed `UPGRADE_DATA_SURVIVED 0.3.66 166`; v0.2.33 on API 35 printed `FAILED upgrade returned to onboarding and the entered records are not on screen`. `promote-release` did not run. Withhold printed `v0.3.66 prerelease=true releases/latest=v0.3.63`.
+
+The sections below are the earlier v0.3.40 release record, not the current install target. Pull requests [#1](https://github.com/mohannadzohair456-beep/folio-finance/pull/1), [#2](https://github.com/mohannadzohair456-beep/folio-finance/pull/2), and [#3](https://github.com/mohannadzohair456-beep/folio-finance/pull/3) are merged.
 
 ## What is safe to install
 
