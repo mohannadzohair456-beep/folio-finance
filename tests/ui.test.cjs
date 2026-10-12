@@ -6,7 +6,12 @@ const script=h.match(/<script>([\s\S]*?)<\/script>/);
 assert.ok(script);
 new vm.Script(script[1]);
 for(const phrase of ['function trackingPanel()', 'function approveObserved(pkg)', 'getCaptureDiagnostics()', 'getObservedSources()', 'Tracking is off', 'Permission required', 'Choose sources']) assert.ok(h.includes(phrase),'Missing tracking setup: '+phrase);
-assert.ok(h.includes("transactions:o.transactions.filter(t=>t.source!=='demo')"),'Old demo state must transition while preserving non-demo records');
+const dataJs=fs.readFileSync('android/app/src/main/assets/folio-data.js','utf8');
+assert.ok(dataJs.includes("entry.source === 'demo'"),'Old demo rows are removed while other records stay');
+assert.ok(h.includes('FolioData.migrate'),'Stored data is migrated on launch');
+assert.ok(h.includes('Content-Security-Policy'),'Bundled page sets a content security policy');
+assert.ok(h.includes("default-src 'none'"),'CSP denies network and remote content by default');
+assert.ok(h.includes("connect-src 'none'"),'CSP blocks network requests');
 assert.ok(h.includes('if(native()){setTimeout(refreshNative,450);setInterval(refreshNative,10000);}'),'Live notifications should refresh');
 
 // Execute the actual bundled application with a minimal WebView-like browser mock.
@@ -54,5 +59,49 @@ assert.equal(restored.sandbox.window.folioImportCsv(exportedCsv),0,'Reimporting 
 assert.equal(JSON.parse(restored.data.get('folio_finance_v1')).transactions.length,2);
 assert.equal(restored.sandbox.window.folioImportCsv(exportedCsv.replace('"EGP"','"INVALID"')),-1,'Invalid CSV rejected');
 assert.equal(JSON.parse(restored.data.get('folio_finance_v1')).transactions.length,2,'Rejected import leaves stored data unchanged');
+
+const hostile=boot();
+hostile.sandbox.window.scrollTo=()=>{};
+vm.runInContext("state.transactions.push({id:\"x' onclick='alert(1)\",merchant:'<img src=x onerror=alert(1)>',amountMinor:100,currency:'EGP',direction:'expense',category:'Other\"><script>alert(1)</script>',occurredAt:Date.now(),source:'notification'});nav('transactions')", hostile.sandbox);
+const rendered=hostile.doc.getElementById('root').innerHTML;
+assert.ok(rendered.includes('&lt;img'),'notification merchant is escaped');
+assert.equal(rendered.includes('<img'), false);
+assert.equal(rendered.includes('<script'), false);
+assert.equal(rendered.includes("onclick='alert"), false);
+
+const backupState={schemaVersion:1,currency:'EGP',capture:true,sources:['com.stc.pay'],v2Onboarded:true,transactions:[{id:'keep',amountMinor:4500,currency:'SAR',direction:'expense',merchant:'Jarir',category:'Shopping',occurredAt:1700000000000,source:'manual'}],budgets:{SAR:{Shopping:250000}},monthlyIncomeMinor:2000000,reportedBalanceMinor:421000,balanceReportedAt:42,monthlyBudgetMinor:900000};
+const seeded=boot(backupState);
+const backup=seeded.sandbox.FolioData.buildBackup(JSON.parse(seeded.data.get('folio_finance_v1')));
+const blank=boot();
+assert.ok(blank.sandbox.window.folioImportJson(JSON.stringify(backup))>=1,'JSON restore returns the transaction count');
+const back=JSON.parse(blank.data.get('folio_finance_v1'));
+assert.equal(back.reportedBalanceMinor,421000);
+assert.equal(back.monthlyIncomeMinor,2000000);
+assert.equal(back.monthlyBudgetMinor,900000);
+assert.equal(back.budgets.SAR.Shopping,250000);
+assert.deepEqual(back.sources,['com.stc.pay']);
+assert.equal(back.v2Onboarded,true);
+assert.equal(back.capture,true);
+assert.equal(back.transactions.find(t=>t.id==='keep').merchant,'Jarir');
+assert.ok(blank.data.get('folio_finance_pre_restore_snapshot'),'restore keeps a snapshot of the previous device data');
+
+const gradle=fs.readFileSync('android/app/build.gradle','utf8');
+const manifest=fs.readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
+assert.ok(gradle.includes('folioVersionCode = 100 + runNumber'),'versionCode stays above the released 33');
+assert.ok(gradle.includes('enableV1Signing = true')&&gradle.includes('enableV2Signing = true')&&gradle.includes('enableV3Signing = true'));
+assert.equal(manifest.includes('Folio New'), false);
+assert.ok(manifest.includes('android:label="@string/app_name"'));
+assert.ok(fs.existsSync('android/gradlew'),'Gradle wrapper is present');
+function inlined(name){
+  const start='/* <folio-inline:'+name+'> */';
+  const end='/* </folio-inline:'+name+'> */';
+  const i=h.indexOf(start), j=h.indexOf(end);
+  assert.ok(i>=0&&j>i,'missing inline '+name);
+  return h.slice(i+start.length,j).trim();
+}
+for (const name of ['folio-data.js','folio-v2.js','folio-v2.css']) {
+  assert.equal(inlined(name), fs.readFileSync('android/app/src/main/assets/'+name,'utf8').trim(), name+' bundled into the page');
+}
+assert.equal(fs.readFileSync('android/app/src/main/res/values/strings.xml','utf8').includes('>Folio<'), true);
 
 console.log('PASS bundled interface and tracking setup checks');

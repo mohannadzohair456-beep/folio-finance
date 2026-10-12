@@ -4,9 +4,13 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.speech.RecognizerIntent;
 import java.util.ArrayList;
+import android.content.ClipData;
 import android.net.Uri;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 import android.content.ComponentName;
@@ -36,6 +40,7 @@ public final class MainActivity extends Activity {
     private boolean loaded;
     private static final int VOICE_REQUEST = 7609;
     private static final int CSV_IMPORT_REQUEST = 7610;
+    private static final int JSON_IMPORT_REQUEST = 7611;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -94,30 +99,69 @@ public final class MainActivity extends Activity {
         web.loadUrl("file:///android_asset/index.html");
     }
     @Override protected void onResume() { super.onResume(); refresh(); }
+    private void deliverImportedText(int resultCode, Intent data, String callback) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null || web == null) return;
+        try (InputStream in = getContentResolver().openInputStream(data.getData());
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            if (in == null) throw new IllegalArgumentException("Unable to read selected document");
+            byte[] chunk = new byte[8192];
+            int n;
+            while ((n = in.read(chunk)) != -1) {
+                if (out.size() + n > 2_000_000) throw new IllegalArgumentException("File is larger than 2 MB");
+                out.write(chunk, 0, n);
+            }
+            String text = out.toString(StandardCharsets.UTF_8.name());
+            String js = callback + "&&" + callback + "(" + JSONObject.quote(text) + ")";
+            web.post(() -> web.evaluateJavascript(js, null));
+        } catch (Exception e) {
+            web.post(() -> web.evaluateJavascript(
+                "window.folioImportError&&window.folioImportError('Could not read the chosen file.')", null));
+        }
+    }
+    private void openImportPicker(int requestCode) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            intent.putExtra(Intent.EXTRA_MIME_TYPES,
+                new String[]{"text/csv", "text/plain", "application/json", "application/vnd.ms-excel", "application/octet-stream"});
+            startActivityForResult(intent, requestCode);
+        } catch (Exception ignored) {
+            if (web != null) web.evaluateJavascript(
+                "window.folioImportError&&window.folioImportError('File picker is unavailable.')", null);
+        }
+    }
+    private void shareDocumentOnUi(String data, String mime, String filename, String title) {
+        try {
+            File dir = new File(getCacheDir(), "backup");
+            if (!dir.isDirectory() && !dir.mkdirs()) throw new IllegalStateException("cache");
+            File out = new File(dir, filename);
+            try (OutputStream sink = new FileOutputStream(out)) {
+                sink.write((data == null ? "" : data).getBytes(StandardCharsets.UTF_8));
+            }
+            Uri uri = Uri.parse("content://" + BackupFileProvider.AUTH + "/" + filename);
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType(mime);
+            share.putExtra(Intent.EXTRA_STREAM, uri);
+            share.putExtra(Intent.EXTRA_SUBJECT, title);
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            share.setClipData(ClipData.newRawUri(title, uri));
+            if (data != null && data.length() <= 100_000) share.putExtra(Intent.EXTRA_TEXT, data);
+            startActivity(Intent.createChooser(share, title));
+        } catch (Exception e) {
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType(mime == null ? "text/plain" : mime);
+            share.putExtra(Intent.EXTRA_TEXT, data == null ? "" : data);
+            startActivity(Intent.createChooser(share, title));
+        }
+    }
     private void refresh() {
         if (loaded && web != null) web.post(() -> web.evaluateJavascript("window.folioNativeRefresh&&window.folioNativeRefresh()", null));
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == CSV_IMPORT_REQUEST) {
-            if (resultCode == RESULT_OK && data != null && data.getData() != null && web != null) {
-                try (InputStream in = getContentResolver().openInputStream(data.getData());
-                     ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-                    if (in == null) throw new IllegalArgumentException("Unable to read selected document");
-                    byte[] chunk = new byte[8192];
-                    int n;
-                    while ((n = in.read(chunk)) != -1) {
-                        if (out.size() + n > 2_000_000) throw new IllegalArgumentException("CSV is larger than 2 MB");
-                        out.write(chunk, 0, n);
-                    }
-                    String csv = out.toString(StandardCharsets.UTF_8.name());
-                    String js = "window.folioImportCsv&&window.folioImportCsv(" + JSONObject.quote(csv) + ")";
-                    web.post(() -> web.evaluateJavascript(js, null));
-                } catch (Exception e) {
-                    web.post(() -> web.evaluateJavascript(
-                        "window.folioImportError&&window.folioImportError('Could not read the chosen CSV file.')", null));
-                }
-            }
+        if (requestCode == CSV_IMPORT_REQUEST || requestCode == JSON_IMPORT_REQUEST) {
+            deliverImportedText(resultCode, data, requestCode == JSON_IMPORT_REQUEST ? "window.folioImportJson" : "window.folioImportCsv");
             return;
         }
         if (requestCode != VOICE_REQUEST || web == null) return;
@@ -149,21 +193,8 @@ public final class MainActivity extends Activity {
                     View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
             });
         }
-        @JavascriptInterface public void pickCsvFile() {
-            runOnUiThread(() -> {
-                try {
-                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                    intent.addCategory(Intent.CATEGORY_OPENABLE);
-                    intent.setType("*/*");
-                    intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                        new String[]{"text/csv", "text/plain", "application/vnd.ms-excel", "application/octet-stream"});
-                    startActivityForResult(intent, CSV_IMPORT_REQUEST);
-                } catch (Exception ignored) {
-                    if (web != null) web.evaluateJavascript(
-                        "window.folioImportError&&window.folioImportError('File picker is unavailable.')", null);
-                }
-            });
-        }
+        @JavascriptInterface public void pickCsvFile() { runOnUiThread(() -> openImportPicker(CSV_IMPORT_REQUEST)); }
+        @JavascriptInterface public void pickBackupFile() { runOnUiThread(() -> openImportPicker(JSON_IMPORT_REQUEST)); }
         @JavascriptInterface public void startVoiceRecognition(String locale) {
             runOnUiThread(() -> {
                 try {
@@ -186,12 +217,13 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public void setCaptureEnabled(boolean value) { NativeStore.setCaptureEnabled(MainActivity.this, value); }
         @JavascriptInterface public void clearPending() { NativeStore.clearQueue(MainActivity.this); }
         @JavascriptInterface public void shareCsv(String data) {
-            runOnUiThread(() -> {
-                Intent share = new Intent(Intent.ACTION_SEND);
-                share.setType("text/csv");
-                share.putExtra(Intent.EXTRA_TEXT, data);
-                startActivity(Intent.createChooser(share, "Export Folio transactions"));
-            });
+            runOnUiThread(() -> shareDocumentOnUi(data, "text/csv", "folio-transactions.csv", "Export Folio transactions"));
+        }
+        @JavascriptInterface public void shareDocument(String data, String mime, String filename, String title) {
+            String safeName = filename != null && filename.matches("[A-Za-z0-9._-]{1,80}") ? filename : "folio-backup.json";
+            String safeMime = mime != null && mime.matches("[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+") ? mime : "application/json";
+            String safeTitle = title == null || title.trim().isEmpty() ? "Export Folio backup" : title;
+            runOnUiThread(() -> shareDocumentOnUi(data, safeMime, safeName, safeTitle));
         }
         @JavascriptInterface public String getCaptureDiagnostics() { return NativeStore.diagnostics(MainActivity.this).toString(); }
         @JavascriptInterface public String getObservedSources() { return NativeStore.getObservedSources(MainActivity.this).toString(); }

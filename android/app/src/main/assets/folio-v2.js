@@ -78,7 +78,7 @@
     const catMatch=s.match(/(?:budget for|budget on|limit for)\s+([a-z &]+?)\s+(?:is|of|to|at|=)/);
     if(catMatch&&value!==null){
       const cat=categoryFrom(catMatch[1]);
-      return {answer:`Set ${cat} monthly budget to ${money(moneyMinor(value))}?`,action:{type:'categoryBudget',category:cat,amount:value,title:'Set category budget'}};
+      return {answer:`Set ${cat} monthly budget to ${money(moneyMinor(value))}?`,action:{type:'categoryBudget',category:cat,amount:value,amountMinor:moneyMinor(value),title:'Set category budget'}};
     }
     if(/budget|spending limit|ميزانية|ميزانيتي/.test(s)&&value!==null){
       return {answer:`Set your overall monthly spending target to ${money(moneyMinor(value))}? This target is separate from your individual category budgets.`,action:{type:'budget',amountMinor:moneyMinor(value),title:'Set monthly budget'}};
@@ -119,7 +119,7 @@
     if(a.type==='balance'){state.reportedBalanceMinor=a.amountMinor;state.balanceReportedAt=timestamp;}
     else if(a.type==='incomePlan')state.monthlyIncomeMinor=a.amountMinor;
     else if(a.type==='budget')state.monthlyBudgetMinor=a.amountMinor;
-    else if(a.type==='categoryBudget'){currentBudgets()[a.category]=a.amount;}
+    else if(a.type==='categoryBudget'){const minor=Number.isFinite(Number(a.amountMinor))?Math.round(Number(a.amountMinor)):Math.round(Number(a.amount)*100);currentBudgets()[a.category]=minor;}
     else if(a.type==='expense'||a.type==='income'){
       state.transactions.push({id:'assistant-'+timestamp+'-'+Math.random().toString(36).slice(2,7),amountMinor:a.amountMinor,currency:state.currency,direction:a.type,merchant:a.merchant,category:a.category,occurredAt:timestamp,source:'assistant'});
     }
