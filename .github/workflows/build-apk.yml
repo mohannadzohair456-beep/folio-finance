@@ -157,12 +157,16 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
-      - name: Publish permanent release
+      - name: Publish prerelease
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.3.${{ github.run_number }}
           name: Folio v0.3.${{ github.run_number }}
-          make_latest: true
+          prerelease: true
+          make_latest: false
           generate_release_notes: true
+          body: |
+            Prerelease. This signed build stays off releases/latest until the device upgrade passes.
+            The upgrade enters data on v0.2.33 and on the schema-1 release v0.3.46, then reads it back.
           files: android/app/build/outputs/apk/release/app-release.apk

@@ -269,5 +269,15 @@ assert.ok(upgradeYml.includes('releases/download/v0.2.33/app-release.apk'), 'v0.
 assert.ok(upgradeYml.includes('releases/download/v0.3.46/app-release.apk'), 'schema 1 upgrade uses the published v0.3.46 APK');
 assert.ok(upgradeYml.includes('--expect-old 0.3.46'), 'schema 1 upgrade checks the installed version');
 assert.ok(upgradeDriver.includes('expect_old'), 'the driver can expect a version other than v0.2.33');
+assert.ok(upgradeYml.includes('releases/download/${CANDIDATE_TAG}/app-release.apk'), 'the upgrade installs the candidate tag');
+assert.ok(upgradeYml.includes('needs: [upgrade-from-v0233, upgrade-from-schema1]'), 'latest changes only after both upgrade paths');
+assert.ok(upgradeYml.includes('-F prerelease=false'), 'a passed upgrade clears the prerelease flag');
+assert.ok(upgradeYml.includes('-f make_latest=true'), 'a passed upgrade promotes the candidate to latest');
+assert.ok(upgradeYml.includes('-F prerelease=true -f make_latest=false'), 'a failed upgrade marks the candidate as a prerelease and clears latest');
+const buildYml=fs.readFileSync('.github/workflows/build-apk.yml','utf8');
+assert.ok(buildYml.includes('prerelease: true'), 'main builds publish as prereleases');
+assert.ok(buildYml.includes('make_latest: false'), 'a new build does not replace releases/latest');
+assert.equal(buildYml.includes('make_latest: true'), false, 'publish does not mark the build latest before the upgrade');
+assert.ok(buildYml.includes('126a716dad1de9968cfb293aa4c7b3b7567d22d1ccc36cdf62f3fdbc3ce7767f'), 'the release certificate pin is unchanged');
 
 console.log('PASS bundled interface and tracking setup checks');

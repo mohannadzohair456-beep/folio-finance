@@ -2,6 +2,11 @@ name: Folio device upgrade
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Tag to test, such as v0.3.50. Empty tests releases/latest and does not change which release is latest.
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -14,6 +19,11 @@ on:
 permissions:
   contents: read
 
+# A main build is published as a prerelease. This workflow installs that tag.
+# releases/latest stays on the last promoted release until both upgrade paths pass.
+env:
+  CANDIDATE_TAG: ${{ (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && format('v0.3.{0}', github.event.workflow_run.run_number)) || github.event.inputs.candidate_tag || '' }}
+
 jobs:
   upgrade-from-v0233:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
@@ -22,13 +32,18 @@ jobs:
     steps:
       - name: Checkout the UI driver
         uses: actions/checkout@v4
-      - name: Download v0.2.33 and the current signed release
+      - name: Download v0.2.33 and the candidate signed release
         run: |
           set -euo pipefail
           curl -fL --retry 3 --output /tmp/folio-v0233.apk \
             https://github.com/mohannadzohair456-beep/folio-finance/releases/download/v0.2.33/app-release.apk
-          curl -fL --retry 3 --output /tmp/folio-current.apk \
-            https://github.com/mohannadzohair456-beep/folio-finance/releases/latest/download/app-release.apk
+          if [ -n "${CANDIDATE_TAG}" ]; then
+            candidate_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${CANDIDATE_TAG}/app-release.apk"
+          else
+            candidate_url="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/app-release.apk"
+          fi
+          echo "Candidate APK: ${candidate_url}"
+          curl -fL --retry 3 --output /tmp/folio-current.apk "$candidate_url"
           python3 -c 'import pathlib,sys
           for path in sys.argv[1:]:
               data=pathlib.Path(path).read_bytes()
@@ -60,24 +75,30 @@ jobs:
           retention-days: 14
 
   upgrade-from-schema1:
-    # Runs after a signed build is published. A push of this file alone still
-    # has the previous release as "latest", so it cannot upgrade schema 1 yet.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    # Only a main push build has a prerelease tag to install. A pull-request
+    # build does not publish, and a push of this file alone still has the
+    # previous promoted release as latest.
+    if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_tag != '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout the UI driver
         uses: actions/checkout@v4
-      - name: Download schema 1 (v0.3.46) and the current signed release
+      - name: Download schema 1 (v0.3.46) and the candidate signed release
         run: |
           set -euo pipefail
-          # v0.3.46 is the signed schema-1 release published before schema 2.
-          # releases/latest moves when a newer signed build is published, so the
-          # old APK stays pinned and the new APK is whatever just shipped.
+          # v0.3.46 is the signed schema-1 release. The candidate is the
+          # prerelease tag, not releases/latest, because latest stays on the
+          # last promoted build until this gate passes.
           curl -fL --retry 3 --output /tmp/folio-schema1.apk \
             https://github.com/mohannadzohair456-beep/folio-finance/releases/download/v0.3.46/app-release.apk
-          curl -fL --retry 3 --output /tmp/folio-current.apk \
-            https://github.com/mohannadzohair456-beep/folio-finance/releases/latest/download/app-release.apk
+          if [ -z "${CANDIDATE_TAG}" ]; then
+            echo "::error::Schema 1 upgrade needs the candidate release tag."
+            exit 1
+          fi
+          candidate_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${CANDIDATE_TAG}/app-release.apk"
+          echo "Candidate APK: ${candidate_url}"
+          curl -fL --retry 3 --output /tmp/folio-current.apk "$candidate_url"
           python3 -c 'import pathlib,sys
           for path in sys.argv[1:]:
               data=pathlib.Path(path).read_bytes()
@@ -123,11 +144,16 @@ jobs:
     steps:
       - name: Checkout the UI driver
         uses: actions/checkout@v4
-      - name: Download the current signed release
+      - name: Download the candidate signed release
         run: |
           set -euo pipefail
-          curl -fL --retry 3 --output /tmp/folio-current.apk \
-            https://github.com/mohannadzohair456-beep/folio-finance/releases/latest/download/app-release.apk
+          if [ -n "${CANDIDATE_TAG}" ]; then
+            candidate_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${CANDIDATE_TAG}/app-release.apk"
+          else
+            candidate_url="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/app-release.apk"
+          fi
+          echo "Candidate APK: ${candidate_url}"
+          curl -fL --retry 3 --output /tmp/folio-current.apk "$candidate_url"
           python3 -c 'import pathlib,sys; data=pathlib.Path(sys.argv[1]).read_bytes();
           assert data[:4]==b"PK\x03\x04", "not an apk"; print(len(data))' /tmp/folio-current.apk
           sha256sum /tmp/folio-current.apk
@@ -154,3 +180,58 @@ jobs:
           path: emulator-artifacts/launch-api${{ matrix.api }}
           if-no-files-found: warn
           retention-days: 14
+
+  # Promotion waits on the two upgrade paths only. A clean-launch failure
+  # does not move releases/latest. These jobs do not touch signing.
+  promote-release:
+    needs: [upgrade-from-v0233, upgrade-from-schema1]
+    if: ${{ success() && needs.upgrade-from-v0233.result == 'success' && needs.upgrade-from-schema1.result == 'success' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_tag != '')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Promote the tested build to latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CANDIDATE_TAG}" ]; then
+            echo "::error::No candidate tag to promote."
+            exit 1
+          fi
+          id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${CANDIDATE_TAG}" --jq .id)"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" -F prerelease=false
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" -f make_latest=true
+          prerelease="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${CANDIDATE_TAG}" --jq .prerelease)"
+          latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          echo "${CANDIDATE_TAG} prerelease=${prerelease} releases/latest=${latest}"
+          if [ "$prerelease" != "false" ] || [ "$latest" != "$CANDIDATE_TAG" ]; then
+            echo "::error::${CANDIDATE_TAG} was not promoted to latest"
+            exit 1
+          fi
+
+  withhold-latest-on-failure:
+    needs: [upgrade-from-v0233, upgrade-from-schema1]
+    if: ${{ failure() && (needs.upgrade-from-v0233.result == 'failure' || needs.upgrade-from-schema1.result == 'failure') && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.candidate_tag != '')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Mark the failed build as a prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CANDIDATE_TAG}" ]; then
+            echo "::error::No candidate tag to mark as a prerelease."
+            exit 1
+          fi
+          id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${CANDIDATE_TAG}" --jq .id)"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" -F prerelease=true -f make_latest=false
+          prerelease="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${CANDIDATE_TAG}" --jq .prerelease)"
+          latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          echo "${CANDIDATE_TAG} prerelease=${prerelease} releases/latest=${latest}"
+          if [ "$prerelease" != "true" ] || [ "$latest" = "$CANDIDATE_TAG" ]; then
+            echo "::error::${CANDIDATE_TAG} is still latest or is not a prerelease"
+            exit 1
+          fi
